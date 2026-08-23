@@ -60,36 +60,34 @@ function L.updateHeartbeat()
         L.mainLoopConn = nil
     end
 
-    if not L.attackSpeedEnabled then
-        local char = LocalPlayer.Character
-        if char then
-            for tool in char:GetChildren() do
-                if tool:IsA("Tool") then
-                    local buff = tool:FindFirstChild("SwingSpeedBuff")
-                    if buff then buff:Destroy() end
-                end
-            end
-        end
-        return
-    end
-
-    L.mainLoopConn = RunService.Heartbeat:Connect(function()
-        local char = LocalPlayer.Character
-        if not char then return end
-
-        if L.attackSpeedEnabled then
-            for tool in char:GetChildren() do
-                if tool:IsA("Tool") and tool:GetAttribute("Melee") then
-                    local buff = tool:FindFirstChild("SwingSpeedBuff")
+    local function modifyTools(parent, add)
+        if not parent then return end
+        for _, tool in ipairs(parent:GetChildren()) do
+            if tool:IsA("Tool") then
+                local buff = tool:FindFirstChild("SwingSpeedBuff")
+                if add then
                     if not buff then
                         buff = Instance.new("NumberValue")
                         buff.Name = "SwingSpeedBuff"
                         buff.Parent = tool
                     end
                     buff.Value = L.attackSpeedMultiplier
+                else
+                    if buff then buff:Destroy() end
                 end
             end
         end
+    end
+
+    if not L.attackSpeedEnabled then
+        modifyTools(LocalPlayer.Character, false)
+        modifyTools(LocalPlayer:FindFirstChild("Backpack"), false)
+        return
+    end
+
+    L.mainLoopConn = RunService.Heartbeat:Connect(function()
+        modifyTools(LocalPlayer.Character, true)
+        modifyTools(LocalPlayer:FindFirstChild("Backpack"), true)
     end)
 end
 
@@ -152,7 +150,7 @@ local function removeHitboxesFromZombie(zombie)
         if parts.head then parts.head:Destroy() end
         L.zombieHitboxAddedParts[zombie] = nil
     else
-        for child in zombie:GetChildren() do
+        for _, child in ipairs(zombie:GetChildren()) do
             if child.Name == "ZombieHitbox_Outer" or child.Name == "ZombieHitbox_Head" then
                 child:Destroy()
             end
@@ -163,10 +161,10 @@ end
 local function refreshZombieHitboxes()
     if not L.zombieHitboxEnabled then
         local toRemove = {}
-        for zombie in L.zombieHitboxAddedParts do
+        for zombie, _ in pairs(L.zombieHitboxAddedParts) do
             table.insert(toRemove, zombie)
         end
-        for zombie in toRemove do
+        for _, zombie in ipairs(toRemove) do
             removeHitboxesFromZombie(zombie)
         end
         L.zombieHitboxAddedParts = {}
@@ -175,9 +173,9 @@ local function refreshZombieHitboxes()
 
     local allZombies = {}
     local folders = {workspace:FindFirstChild("Zombies"), workspace:FindFirstChild("Camera")}
-    for folder in folders do
+    for _, folder in ipairs(folders) do
         if folder then
-            for z in folder:GetChildren() do
+            for _, z in ipairs(folder:GetChildren()) do
                 if z:IsA("Model") and z.Name == "m_Zombie" then
                     table.insert(allZombies, z)
                 end
@@ -186,20 +184,20 @@ local function refreshZombieHitboxes()
     end
 
     local toRemove = {}
-    for zombie in L.zombieHitboxAddedParts do
+    for zombie, _ in pairs(L.zombieHitboxAddedParts) do
         local stillExists = false
-        for z in allZombies do
+        for _, z in ipairs(allZombies) do
             if z == zombie then stillExists = true; break end
         end
         if not stillExists then
             table.insert(toRemove, zombie)
         end
     end
-    for zombie in toRemove do
+    for _, zombie in ipairs(toRemove) do
         removeHitboxesFromZombie(zombie)
     end
 
-    for z in allZombies do
+    for _, z in ipairs(allZombies) do
         if not L.zombieHitboxAddedParts[z] then
             addHitboxesToZombie(z)
         end
@@ -208,7 +206,7 @@ end
 
 local function updateAllZombieHitboxSizes()
     if not L.zombieHitboxEnabled then return end
-    for zombie, parts in L.zombieHitboxAddedParts do
+    for zombie, parts in pairs(L.zombieHitboxAddedParts) do
         if parts.outer and parts.outer.Parent then
             parts.outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
         end
@@ -220,7 +218,7 @@ end
 
 local function updateHitboxVisibility()
     local targetTransparency = L.zombieHitboxVisible and L.zombieHitboxTransparency or 1
-    for zombie, parts in L.zombieHitboxAddedParts do
+    for zombie, parts in pairs(L.zombieHitboxAddedParts) do
         if parts.outer and parts.outer.Parent then
             parts.outer.Transparency = targetTransparency
         end
@@ -269,7 +267,7 @@ end
 
 local function getZombieHead(zombieModel)
     if not zombieModel then return nil end
-    for part in zombieModel:GetChildren() do
+    for _, part in ipairs(zombieModel:GetChildren()) do
         if part.Name == "Head" and (part:IsA("Part") or part:IsA("MeshPart")) then
             return part
         end
@@ -504,7 +502,7 @@ RightGroupBox:AddToggle('SpeedToggle', {
 
 RightGroupBox:AddSlider('SpeedSlider', {
     Text = 'Tomboy Speed Multiplier',
-    Default = 0.5,
+    Default = 1.0,
     Min = 0.5,
     Max = 10.0,
     Suffix = 'x',
@@ -535,4 +533,4 @@ ThemeManager:ApplyToTab(Tabs['UI Settings'])
 
 SaveManager:LoadAutoloadConfig()
 
-print("[TOMBOY HUB]: Loaded successfully with fully operational config manager!")
+print("[TOMBOY HUB]: Loaded successfully!")
