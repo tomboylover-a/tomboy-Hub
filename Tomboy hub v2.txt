@@ -3,9 +3,15 @@ local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
+-- Localized Globals for Performance
+local Vector3_new = Vector3.new
+local Color3_fromRGB = Color3.fromRGB
+local Instance_new = Instance.new
+local tick = tick
+local task_wait = task.wait
+
 local Options = Library.Options
 local Toggles = Library.Toggles
-
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
@@ -27,7 +33,6 @@ local RightGroupBox = Tabs.Main:AddRightGroupbox("Combat & Speed")
 -- Services
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
-local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 -- State Variables
@@ -49,64 +54,64 @@ L.ZOMBIE_HIT_COOLDOWN = 0.1
 
 L.attackSpeedEnabled = false
 L.attackSpeedMultiplier = 1
-L.mainLoopConn = nil
 
 --------------------------------------------------
--- 1. UNIFIED HEARTBEAT (ATTACK SPEED ONLY)
+-- 1. EVENT-DRIVEN ATTACK SPEED (OPTIMIZED)
 --------------------------------------------------
-function L.updateHeartbeat()
-    if L.mainLoopConn then
-        L.mainLoopConn:Disconnect()
-        L.mainLoopConn = nil
-    end
-
-    local function modifyTools(parent, add)
-        if not parent then return end
-        for _, tool in ipairs(parent:GetChildren()) do
-            if tool:IsA("Tool") then
-                local buff = tool:FindFirstChild("SwingSpeedBuff")
-                if add then
-                    if not buff then
-                        buff = Instance.new("NumberValue")
-                        buff.Name = "SwingSpeedBuff"
-                        buff.Parent = tool
-                    end
-                    buff.Value = L.attackSpeedMultiplier
-                else
-                    if buff then buff:Destroy() end
-                end
-            end
+local function applyBuffToTool(tool)
+    if not tool:IsA("Tool") then return end
+    
+    local buff = tool:FindFirstChild("SwingSpeedBuff")
+    if L.attackSpeedEnabled then
+        if not buff then
+            buff = Instance_new("NumberValue")
+            buff.Name = "SwingSpeedBuff"
+            buff.Parent = tool
         end
+        buff.Value = L.attackSpeedMultiplier
+    else
+        if buff then buff:Destroy() end
     end
-
-    if not L.attackSpeedEnabled then
-        modifyTools(LocalPlayer.Character, false)
-        modifyTools(LocalPlayer:FindFirstChild("Backpack"), false)
-        return
-    end
-
-    L.mainLoopConn = RunService.Heartbeat:Connect(function()
-        modifyTools(LocalPlayer.Character, true)
-        modifyTools(LocalPlayer:FindFirstChild("Backpack"), true)
-    end)
 end
 
+function L.updateAllTools()
+    local char = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    
+    if char then
+        for _, tool in char:GetChildren() do applyBuffToTool(tool) end
+    end
+    if backpack then
+        for _, tool in backpack:GetChildren() do applyBuffToTool(tool) end
+    end
+end
+
+-- Bind to character and backpack to catch equips/unequips automatically
+local function setupToolListeners(char)
+    char.ChildAdded:Connect(applyBuffToTool)
+    local backpack = LocalPlayer:WaitForChild("Backpack", 5)
+    if backpack then
+        backpack.ChildAdded:Connect(applyBuffToTool)
+    end
+end
+
+if LocalPlayer.Character then setupToolListeners(LocalPlayer.Character) end
+
 --------------------------------------------------
--- 2. HITBOX LOGIC
+-- 2. HITBOX LOGIC (OPTIMIZED)
 --------------------------------------------------
 local function addHitboxesToZombie(zombie)
-    if not L.zombieHitboxEnabled then return end
-    if L.zombieHitboxAddedParts[zombie] then return end
+    if not L.zombieHitboxEnabled or L.zombieHitboxAddedParts[zombie] then return end
     local hrp = zombie:FindFirstChild("HumanoidRootPart")
     local head = zombie:FindFirstChild("Head")
     if not hrp or not head then return end
 
     local targetTransparency = L.zombieHitboxVisible and L.zombieHitboxTransparency or 1
-    local hitboxColor = Color3.fromRGB(160, 32, 240) -- Purple
+    local hitboxColor = Color3_fromRGB(160, 32, 240)
 
-    local outer = Instance.new("Part")
+    local outer = Instance_new("Part")
     outer.Name = "ZombieHitbox_Outer"
-    outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
+    outer.Size = Vector3_new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
     outer.Color = hitboxColor
     outer.Material = Enum.Material.Neon
     outer.Transparency = targetTransparency
@@ -117,14 +122,14 @@ local function addHitboxesToZombie(zombie)
     outer.CFrame = hrp.CFrame
     outer.Parent = zombie
 
-    local weldOuter = Instance.new("WeldConstraint")
+    local weldOuter = Instance_new("WeldConstraint")
     weldOuter.Part0 = hrp
     weldOuter.Part1 = outer
     weldOuter.Parent = outer
 
-    local headBox = Instance.new("Part")
+    local headBox = Instance_new("Part")
     headBox.Name = "ZombieHitbox_Head"
-    headBox.Size = Vector3.new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
+    headBox.Size = Vector3_new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
     headBox.Color = hitboxColor
     headBox.Material = Enum.Material.Neon
     headBox.Transparency = targetTransparency
@@ -135,7 +140,7 @@ local function addHitboxesToZombie(zombie)
     headBox.CFrame = head.CFrame
     headBox.Parent = zombie
 
-    local weldHead = Instance.new("WeldConstraint")
+    local weldHead = Instance_new("WeldConstraint")
     weldHead.Part0 = head
     weldHead.Part1 = headBox
     weldHead.Parent = headBox
@@ -149,76 +154,45 @@ local function removeHitboxesFromZombie(zombie)
         if parts.outer then parts.outer:Destroy() end
         if parts.head then parts.head:Destroy() end
         L.zombieHitboxAddedParts[zombie] = nil
-    else
-        for _, child in ipairs(zombie:GetChildren()) do
-            if child.Name == "ZombieHitbox_Outer" or child.Name == "ZombieHitbox_Head" then
-                child:Destroy()
-            end
-        end
     end
 end
 
 local function refreshZombieHitboxes()
     if not L.zombieHitboxEnabled then
-        local toRemove = {}
-        for zombie, _ in pairs(L.zombieHitboxAddedParts) do
-            table.insert(toRemove, zombie)
-        end
-        for _, zombie in ipairs(toRemove) do
+        for zombie in L.zombieHitboxAddedParts do
             removeHitboxesFromZombie(zombie)
         end
         L.zombieHitboxAddedParts = {}
         return
     end
 
-    local allZombies = {}
     local folders = {workspace:FindFirstChild("Zombies"), workspace:FindFirstChild("Camera")}
-    for _, folder in ipairs(folders) do
+    for _, folder in folders do
         if folder then
-            for _, z in ipairs(folder:GetChildren()) do
-                if z:IsA("Model") and z.Name == "m_Zombie" then
-                    table.insert(allZombies, z)
+            for _, z in folder:GetChildren() do
+                if z:IsA("Model") and (z.Name == "m_Zombie" or z:FindFirstChild("Orig")) then
+                    addHitboxesToZombie(z)
                 end
             end
-        end
-    end
-
-    local toRemove = {}
-    for zombie, _ in pairs(L.zombieHitboxAddedParts) do
-        local stillExists = false
-        for _, z in ipairs(allZombies) do
-            if z == zombie then stillExists = true; break end
-        end
-        if not stillExists then
-            table.insert(toRemove, zombie)
-        end
-    end
-    for _, zombie in ipairs(toRemove) do
-        removeHitboxesFromZombie(zombie)
-    end
-
-    for _, z in ipairs(allZombies) do
-        if not L.zombieHitboxAddedParts[z] then
-            addHitboxesToZombie(z)
         end
     end
 end
 
 local function updateAllZombieHitboxSizes()
     if not L.zombieHitboxEnabled then return end
-    for zombie, parts in pairs(L.zombieHitboxAddedParts) do
+    for _, parts in L.zombieHitboxAddedParts do
         if parts.outer and parts.outer.Parent then
-            parts.outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
+            parts.outer.Size = Vector3_new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
         end
         if parts.head and parts.head.Parent then
-            parts.head.Size = Vector3.new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
+            parts.head.Size = Vector3_new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
         end
     end
 end
 
 local function updateHitboxVisibility()
     local targetTransparency = L.zombieHitboxVisible and L.zombieHitboxTransparency or 1
-    for zombie, parts in pairs(L.zombieHitboxAddedParts) do
+    for _, parts in L.zombieHitboxAddedParts do
         if parts.outer and parts.outer.Parent then
             parts.outer.Transparency = targetTransparency
         end
@@ -230,7 +204,7 @@ end
 
 local function onZombieAdded(zombie)
     if L.zombieHitboxEnabled and zombie:IsA("Model") and zombie.Name == "m_Zombie" then
-        task.wait(0.1)
+        task_wait(0.1)
         addHitboxesToZombie(zombie)
     end
 end
@@ -240,39 +214,39 @@ if zombiesFolder then zombiesFolder.ChildAdded:Connect(onZombieAdded) end
 local cameraFolder = workspace:FindFirstChild("Camera")
 if cameraFolder then cameraFolder.ChildAdded:Connect(onZombieAdded) end
 
+-- Optimized background cleanup loop
 task.spawn(function()
     while true do
-        task.wait(2)
+        task_wait(1)
         if L.zombieHitboxEnabled then
-            refreshZombieHitboxes()
+            for zombie in L.zombieHitboxAddedParts do
+                if not zombie:IsDescendantOf(workspace) or not zombie:FindFirstChild("HumanoidRootPart") then
+                    removeHitboxesFromZombie(zombie)
+                end
+            end
         end
     end
 end)
 
 --------------------------------------------------
--- 3. COMBAT HOOKS (HEADSHOTS)
+-- 3. COMBAT HOOKS (OPTIMIZED)
 --------------------------------------------------
 local function getZombieModel(part)
     if not part then return nil end
-    local model = part.Parent
-    for i = 1, 5 do
-        if not model then break end
-        if model:IsA("Model") and (model.Name == "m_Zombie" or model:FindFirstChild("Orig")) then
-            return model
-        end
-        model = model.Parent
+    local model = part:FindFirstAncestor("m_Zombie")
+    if model then return model end
+    
+    local current = part.Parent
+    for i = 1, 3 do
+        if not current or current == workspace then break end
+        if current:FindFirstChild("Orig") then return current end
+        current = current.Parent
     end
     return nil
 end
 
 local function getZombieHead(zombieModel)
-    if not zombieModel then return nil end
-    for _, part in ipairs(zombieModel:GetChildren()) do
-        if part.Name == "Head" and (part:IsA("Part") or part:IsA("MeshPart")) then
-            return part
-        end
-    end
-    return nil
+    return zombieModel:FindFirstChild("Head") or zombieModel:FindFirstChild("Head", true)
 end
 
 function L.unifiedBayonetHitCheck(self, origin, direction, raycastParams, hitEntities)
@@ -285,33 +259,33 @@ function L.unifiedBayonetHitCheck(self, origin, direction, raycastParams, hitEnt
             if L.lastZombieHitTime[zombieModel] and now - L.lastZombieHitTime[zombieModel] < L.ZOMBIE_HIT_COOLDOWN then
                 return 0
             end
+            
             local orig = zombieModel:FindFirstChild("Orig")
-            if orig then
-                local head = getZombieHead(zombieModel)
-                if head then
-                    local zombieRef = orig.Value
-                    local hitPos = head.Position
-                    local partName = "Head"
-                    if L.headshotEnabled then
-                        partName = "Head"
-                    else
-                        if hitPart == head then partName = "Head" else partName = "Torso" end
-                    end
-                    if L.removeBloodEnabled then
-                        local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
-                        if rootPart then hitPos = rootPart.Position + Vector3.new(0, -9999, 0) end
-                    end
-                    local char = LocalPlayer.Character
-                    local headPart = char and char:FindFirstChild("Head")
-                    local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3.new(0,1,0)
-                    self.remoteEvent:FireServer("Bayonet_HitZombie", zombieRef, hitPos, true, partName)
-                    self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
-                    L.lastZombieHitTime[zombieModel] = now
-                    return 1
+            local head = getZombieHead(zombieModel)
+            
+            if orig and head then
+                local zombieRef = orig.Value
+                local hitPos = head.Position
+                local partName = (L.headshotEnabled or hitPart == head) and "Head" or "Torso"
+
+                if L.removeBloodEnabled then
+                    local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
+                    if rootPart then hitPos = rootPart.Position + Vector3_new(0, -9999, 0) end
                 end
+                
+                local char = LocalPlayer.Character
+                local headPart = char and char:FindFirstChild("Head")
+                local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3_new(0, 1, 0)
+                
+                self.remoteEvent:FireServer("Bayonet_HitZombie", zombieRef, hitPos, true, partName)
+                self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
+                
+                L.lastZombieHitTime[zombieModel] = now
+                return 1
             end
         end
     end
+    
     if L.originalBayonetHitCheck then
         return L.originalBayonetHitCheck(self, origin, direction, raycastParams, hitEntities)
     end
@@ -328,36 +302,36 @@ function L.unifiedMeleeHitCheck(self, origin, direction, raycastParams, hitEntit
             if L.lastZombieHitTime[zombieModel] and now - L.lastZombieHitTime[zombieModel] < L.ZOMBIE_HIT_COOLDOWN then
                 return 0
             end
+            
             local orig = zombieModel:FindFirstChild("Orig")
-            if orig then
-                local head = getZombieHead(zombieModel)
-                if head then
-                    local zombieRef = orig.Value
-                    local hitPos = head.Position
-                    local partName = "Head"
-                    if L.headshotEnabled then
-                        partName = "Head"
-                    else
-                        if hitPart == head then partName = "Head" else partName = "Torso" end
-                    end
-                    if L.removeBloodEnabled then
-                        local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
-                        if rootPart then hitPos = rootPart.Position + Vector3.new(0, -9999, 0) end
-                    end
-                    local char = LocalPlayer.Character
-                    local headPart = char and char:FindFirstChild("Head")
-                    local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3.new(0,1,0)
-                    if isCharge then
-                        self.remoteEvent:FireServer("ThrustCharge", zombieRef, hitPos, rayResult.Normal)
-                    else
-                        self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
-                    end
-                    L.lastZombieHitTime[zombieModel] = now
-                    return 1
+            local head = getZombieHead(zombieModel)
+            
+            if orig and head then
+                local zombieRef = orig.Value
+                local hitPos = head.Position
+                local partName = (L.headshotEnabled or hitPart == head) and "Head" or "Torso"
+
+                if L.removeBloodEnabled then
+                    local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
+                    if rootPart then hitPos = rootPart.Position + Vector3_new(0, -9999, 0) end
                 end
+                
+                local char = LocalPlayer.Character
+                local headPart = char and char:FindFirstChild("Head")
+                local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3_new(0, 1, 0)
+                
+                if isCharge then
+                    self.remoteEvent:FireServer("ThrustCharge", zombieRef, hitPos, rayResult.Normal)
+                else
+                    self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
+                end
+                
+                L.lastZombieHitTime[zombieModel] = now
+                return 1
             end
         end
     end
+    
     if L.originalMeleeHitCheck then
         return L.originalMeleeHitCheck(self, origin, direction, raycastParams, hitEntities, isCharge)
     end
@@ -375,30 +349,18 @@ function L.updateHitHooks()
             local success, FlintLock = pcall(require, weapons:FindFirstChild("Flintlock"))
             if success and FlintLock then
                 if canHookFunction then
-                    if not L.originalBayonetHitCheck then
-                        L.originalBayonetHitCheck = hookfunction(FlintLock.BayonetHitCheck, L.unifiedBayonetHitCheck)
-                    else
-                        hookfunction(FlintLock.BayonetHitCheck, L.unifiedBayonetHitCheck)
-                    end
+                    L.originalBayonetHitCheck = hookfunction(FlintLock.BayonetHitCheck, L.unifiedBayonetHitCheck)
                 else
-                    if not L.originalBayonetHitCheck then
-                        L.originalBayonetHitCheck = FlintLock.BayonetHitCheck
-                    end
+                    L.originalBayonetHitCheck = L.originalBayonetHitCheck or FlintLock.BayonetHitCheck
                     FlintLock.BayonetHitCheck = L.unifiedBayonetHitCheck
                 end
             end
             local success2, MeleeBase = pcall(require, weapons:FindFirstChild("MeleeBase"))
             if success2 and MeleeBase then
                 if canHookFunction then
-                    if not L.originalMeleeHitCheck then
-                        L.originalMeleeHitCheck = hookfunction(MeleeBase.MeleeHitCheck, L.unifiedMeleeHitCheck)
-                    else
-                        hookfunction(MeleeBase.MeleeHitCheck, L.unifiedMeleeHitCheck)
-                    end
+                    L.originalMeleeHitCheck = hookfunction(MeleeBase.MeleeHitCheck, L.unifiedMeleeHitCheck)
                 else
-                    if not L.originalMeleeHitCheck then
-                        L.originalMeleeHitCheck = MeleeBase.MeleeHitCheck
-                    end
+                    L.originalMeleeHitCheck = L.originalMeleeHitCheck or MeleeBase.MeleeHitCheck
                     MeleeBase.MeleeHitCheck = L.unifiedMeleeHitCheck
                 end
             end
@@ -423,15 +385,16 @@ function L.updateHitHooks()
     end
 end
 
-LocalPlayer.CharacterAdded:Connect(function()
-    task.wait(1)
+LocalPlayer.CharacterAdded:Connect(function(char)
+    setupToolListeners(char)
+    task_wait(1)
     L.updateHitHooks()
+    L.updateAllTools()
 end)
 
 --------------------------------------------------
 -- OBSIDIAN UI ELEMENTS
 --------------------------------------------------
--- Hitbox UI
 LeftGroupBox:AddToggle('HitboxToggle', {
     Text = 'Enable Hitbox Expander',
     Default = false,
@@ -444,11 +407,7 @@ LeftGroupBox:AddToggle('HitboxToggle', {
 
 LeftGroupBox:AddSlider('HitboxSizeSlider', {
     Text = 'Hitbox Size',
-    Default = 10,
-    Min = 2,
-    Max = 30,
-    Suffix = ' studs',
-    Rounding = 0,
+    Default = 10, Min = 2, Max = 30, Suffix = ' studs', Rounding = 0,
     Callback = function(Value)
         L.zombieHitboxSize = Value
         updateAllZombieHitboxSizes()
@@ -466,20 +425,13 @@ LeftGroupBox:AddToggle('HitboxVisualsToggle', {
 
 LeftGroupBox:AddSlider('HitboxTransparencySlider', {
     Text = 'Visual Transparency',
-    Default = 60,
-    Min = 0,
-    Max = 100,
-    Suffix = '%',
-    Rounding = 0,
+    Default = 60, Min = 0, Max = 100, Suffix = '%', Rounding = 0,
     Callback = function(Value)
         L.zombieHitboxTransparency = Value / 100
-        if L.zombieHitboxVisible then
-            updateHitboxVisibility()
-        end
+        if L.zombieHitboxVisible then updateHitboxVisibility() end
     end
 })
 
--- Combat UI
 RightGroupBox:AddToggle('ForceHitToggle', {
     Text = 'Force TomboyHit (Headshots)',
     Default = false,
@@ -496,19 +448,16 @@ RightGroupBox:AddToggle('SpeedToggle', {
     Tooltip = 'Attack speed adjust with 0.5 being most legit.',
     Callback = function(Value)
         L.attackSpeedEnabled = Value
-        L.updateHeartbeat()
+        L.updateAllTools()
     end
 })
 
 RightGroupBox:AddSlider('SpeedSlider', {
     Text = 'Tomboy Speed Multiplier',
-    Default = 1.0,
-    Min = 0.5,
-    Max = 10.0,
-    Suffix = 'x',
-    Rounding = 1,
+    Default = 1.0, Min = 0.5, Max = 10.0, Suffix = 'x', Rounding = 1,
     Callback = function(Value)
         L.attackSpeedMultiplier = Value
+        if L.attackSpeedEnabled then L.updateAllTools() end
     end
 })
 
@@ -518,19 +467,16 @@ RightGroupBox:AddSlider('SpeedSlider', {
 local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
 MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
 
--- Setup save manager settings
 SaveManager:SetLibrary(Library)
 ThemeManager:SetLibrary(Library)
 
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({})
-
 SaveManager:SetFolder("TomboyHubConfigs")
 ThemeManager:SetFolder("TomboyHubConfigs")
 
 SaveManager:BuildConfigSection(Tabs['UI Settings'])
 ThemeManager:ApplyToTab(Tabs['UI Settings'])
-
 SaveManager:LoadAutoloadConfig()
 
-print("[TOMBOY HUB]: Loaded successfully!")
+print("[TOMBOY HUB]: Loaded successfully & Optimized!")
