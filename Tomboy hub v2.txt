@@ -177,7 +177,7 @@ if LocalPlayer.Character then
 end
 
 --------------------------------------------------
--- 3. ACCURATE ESP & HITBOX MANAGER (Source Integration)
+-- 3. ACCURATE ESP & HITBOX MANAGER
 --------------------------------------------------
 local function getAccurateZombieType(zombieModel)
     if zombieModel:FindFirstChild("Barrel") then return "Bomber" end
@@ -437,8 +437,11 @@ local function onZombieAdded(zombie)
     end
 end
 
-if zombiesFolder then zombiesFolder.ChildAdded:Connect(onZombieAdded) end
-if cameraFolder then cameraFolder.ChildAdded:Connect(onZombieAdded) end
+local zombiesFolderRef = workspace:FindFirstChild("Zombies")
+if zombiesFolderRef then zombiesFolderRef.ChildAdded:Connect(onZombieAdded) end
+
+local cameraFolderRef = workspace:FindFirstChild("Camera")
+if cameraFolderRef then cameraFolderRef.ChildAdded:Connect(onZombieAdded) end
 
 --------------------------------------------------
 -- 4. ANTILAG SYSTEM LOOP (Particles & Horses)
@@ -587,4 +590,35 @@ VisualExtraBox:AddToggle('NameESPToggle', {
 AntilagBox:AddToggle('RemoveParticlesToggle', {
     Text = 'Removes Particles',
     Default = false,
-    Tooltip = 'Deletes particle emitters, fire, 
+    Tooltip = 'Deletes particle emitters, fire, and smoke effects for FPS boost.',
+    Callback = function(Value)
+        L.removeParticlesEnabled = Value
+    end
+})
+
+AntilagBox:AddToggle('RemoveHorsesToggle', {
+    Text = 'Removes Horses (Westminster/Catacombs)',
+    Default = false,
+    Tooltip = 'Cleans up horse models and related map heavy entities.',
+    Callback = function(Value)
+        L.removeHorsesEnabled = Value
+    end
+})
+
+local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
+MenuGroup:AddButton('destroy thou script', function() 
+    local folder = workspace:FindFirstChild("TomboyHitboxFolder")
+    if folder then folder:Destroy() end
+    Library:Unload() 
+end)
+
+SaveManager:SetLibrary(Library)
+ThemeManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("TomboyHubConfigs")
+ThemeManager:SetFolder("TomboyHubConfigs")
+SaveManager:BuildConfigSection(Tabs['UI Settings'])
+ThemeManager:ApplyToTab(Tabs['UI Settings'])
+SaveManager:LoadAutoloadConfig()
+
+print("tomboy hub loaded successfully with tomboys!")
