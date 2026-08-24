@@ -1,7 +1,22 @@
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+-- Safe loading for Obsidian Library
+local successLib, Library = pcall(function()
+    return loadstring(game:HttpGet(repo .. "Library.lua"))()
+end)
+
+local successTM, ThemeManager = pcall(function()
+    return loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+end)
+
+local successSM, SaveManager = pcall(function()
+    return loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+end)
+
+if not successLib or not Library then
+    warn("Tomboy Hub: Failed to load Obsidian Library from GitHub. Check your executor's HTTP capabilities.")
+    return
+end
 
 -- Services & Globals
 local Players = game:GetService("Players")
@@ -468,14 +483,19 @@ MenuGroup:AddButton('destroy thou script', function()
     Library:Unload() 
 end)
 
-SaveManager:SetLibrary(Library)
-ThemeManager:SetLibrary(Library)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetFolder("TomboyHubConfigs")
-ThemeManager:SetFolder("TomboyHubConfigs")
-SaveManager:BuildConfigSection(Tabs['UI Settings'])
-ThemeManager:ApplyToTab(Tabs['UI Settings'])
-SaveManager:LoadAutoloadConfig()
+if successTM and ThemeManager then
+    ThemeManager:SetLibrary(Library)
+    ThemeManager:SetFolder("TomboyHubConfigs")
+    ThemeManager:ApplyToTab(Tabs['UI Settings'])
+end
+
+if successSM and SaveManager then
+    SaveManager:SetLibrary(Library)
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetFolder("TomboyHubConfigs")
+    SaveManager:BuildConfigSection(Tabs['UI Settings'])
+    SaveManager:LoadAutoloadConfig()
+end
 
 ---------------------------------------------------------------------
 -- === CUSTOM ZOMBIE ESP GUI SCRIPT ===
@@ -569,23 +589,4 @@ local function scanAndApply()
                     if espRToggled and zombie:FindFirstChild("Zombie") and zombie.Zombie.WalkSpeed > 20 then
                         ensureHighlight(child, Color3.fromRGB(255, 0, 0))
                     else
-                        removeHighlight(child)
-                    end
-
-                    -- Bomber (Orange)
-                    if espBToggled and child:FindFirstChild("Barrel") then
-                        ensureHighlight(child, Color3.fromRGB(255, 140, 0))
-                    elseif not espRToggled then
-                        removeHighlight(child)
-                    end
-
-                    -- Cuirassier (Blue)
-                    if espCuToggled and child:FindFirstChild("Sword") then
-                        ensureHighlight(child, Color3.fromRGB(0, 100, 255))
-                    elseif not (espRToggled or espBToggled) then
-                        removeHighlight(child)
-                    end
-
-                    -- Zapper/Sapper (Sakura Pink)
-                    if espZToggled and child:FindFirstChild("Axe") then
-                        ensureHighlight(child, Color3.fromR
+              
