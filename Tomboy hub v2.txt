@@ -1,70 +1,66 @@
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local successLib, Library = pcall(function()
+    local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+    return loadstring(game:HttpGet(repo .. "Library.lua"))()
+end)
 
--- Localized Globals for Performance
-local Vector3_new = Vector3.new
-local Color3_fromRGB = Color3.fromRGB
-local Instance_new = Instance.new
-local tick = tick
-local task_wait = task.wait
+if not successLib or not Library then
+    warn("[TOMBOY HUB]: Failed to load Obsidian Library.")
+    return
+end
 
-local Options = Library.Options
-local Toggles = Library.Toggles
+local successTheme, ThemeManager = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
+end)
+
+local successSave, SaveManager = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua"))()
+end)
+
+-- Services & Globals
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local CoreGui = game:GetService("CoreGui")
+
 Library.ShowToggleFrameInKeybinds = true
 
-local Window = Library:CreateWindow({
-    Title = "Tomboy Hub",
-    Footer = "Obsidian UI",
-    Icon = 0000000000,
-    NotifySide = "Right",
-    ShowCustomCursor = false,
-})
-
-local Tabs = {
-    Main = Window:AddTab("Hitboxes & Combat", "user"),
-    ['UI Settings'] = Window:AddTab("UI Settings", "settings"),
-}
-
-local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Zombie Hitbox Expander")
-local RightGroupBox = Tabs.Main:AddRightGroupbox("Combat & Speed")
-
--- Services
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
--- State Variables
 L = L or {}
-
+L.tomboyHitterEnabled = false
 L.zombieHitboxEnabled = false
 L.zombieHitboxSize = 10
-L.zombieHitboxVisible = false
-L.zombieHitboxTransparency = 0.6
+L.zombieHitboxTransparency = 0.5
 L.zombieHitboxAddedParts = {}
 
-L.headshotEnabled = false
-L.removeBloodEnabled = false
-L.hookInstalled = false
-L.originalBayonetHitCheck = nil
-L.originalMeleeHitCheck = nil
-L.lastZombieHitTime = {}
-L.ZOMBIE_HIT_COOLDOWN = 0.1
+L.activeESP = {}
+L.zombieNameESPEnabled = false
+
+-- Exact Zombie Colors Configuration
+L.espTypes = {
+    Shambler   = { Enabled = false, Color = Color3.fromRGB(255, 255, 255) }, -- White
+    Runner     = { Enabled = false, Color = Color3.fromRGB(255, 0, 0) },     -- Red
+    Bomber     = { Enabled = false, Color = Color3.fromRGB(255, 140, 0) },   -- Orange
+    Igniter    = { Enabled = false, Color = Color3.fromRGB(255, 255, 0) },   -- Yellow
+    Sapper     = { Enabled = false, Color = Color3.fromRGB(255, 183, 197) }, -- Sakura Pink
+    Cuirassier = { Enabled = false, Color = Color3.fromRGB(0, 100, 255) }    -- Blue
+}
 
 L.attackSpeedEnabled = false
 L.attackSpeedMultiplier = 1
 
+local hookInstalled = false
+local originalMeleeHitCheck = nil
+local lastZombieHitTime = {}
+local ZOMBIE_HIT_COOLDOWN = 0.1
+
 --------------------------------------------------
--- 1. EVENT-DRIVEN ATTACK SPEED (OPTIMIZED)
+-- 1. ATTACK SPEED SYSTEM
 --------------------------------------------------
 local function applyBuffToTool(tool)
     if not tool:IsA("Tool") then return end
-    
     local buff = tool:FindFirstChild("SwingSpeedBuff")
     if L.attackSpeedEnabled then
         if not buff then
-            buff = Instance_new("NumberValue")
+            buff = Instance.new("NumberValue")
             buff.Name = "SwingSpeedBuff"
             buff.Parent = tool
         end
@@ -77,7 +73,6 @@ end
 function L.updateAllTools()
     local char = LocalPlayer.Character
     local backpack = LocalPlayer:FindFirstChild("Backpack")
-    
     if char then
         for _, tool in char:GetChildren() do applyBuffToTool(tool) end
     end
@@ -86,35 +81,153 @@ function L.updateAllTools()
     end
 end
 
--- Bind to character and backpack to catch equips/unequips automatically
 local function setupToolListeners(char)
     char.ChildAdded:Connect(applyBuffToTool)
     local backpack = LocalPlayer:WaitForChild("Backpack", 5)
-    if backpack then
-        backpack.ChildAdded:Connect(applyBuffToTool)
-    end
+    if backpack then backpack.ChildAdded:Connect(applyBuffToTool) end
 end
 
 if LocalPlayer.Character then setupToolListeners(LocalPlayer.Character) end
 
 --------------------------------------------------
--- 2. HITBOX LOGIC (OPTIMIZED)
+-- 2. CLEAN MELEE HOOK
 --------------------------------------------------
+local function getZombieModel(part)
+    if not part then return nil end
+    local model = part.Parent
+    for i = 1, 5 do
+        if not model then break end
+        if model:IsA("Model") and (model.Name == "m_Zombie" or model:FindFirstChild("Orig")) then
+            return model
+        end
+        model = model.Parent
+    end
+    return nil
+end
+
+local function getZombieHead(zombieModel)
+    if not zombieModel then return nil end
+    for _, part in zombieModel:GetChildren() do
+        if part.Name == "Head" and (part:IsA("Part") or part:IsA("MeshPart")) then
+            return part
+        end
+    end
+    return nil
+end
+
+local function unifiedMeleeHitCheck(self, origin, direction, raycastParams, hitEntities, isCharge)
+    local rayResult = workspace:Raycast(origin, direction, raycastParams)
+    if rayResult and L.tomboyHitterEnabled then
+        local hitPart = rayResult.Instance
+        local zombieModel = getZombieModel(hitPart)
+        if zombieModel then
+            local now = tick()
+            if lastZombieHitTime[zombieModel] and now - lastZombieHitTime[zombieModel] < ZOMBIE_HIT_COOLDOWN then
+                return 0
+            end
+            local orig = zombieModel:FindFirstChild("Orig")
+            if orig then
+                local head = getZombieHead(zombieModel)
+                if head then
+                    local zombieRef = orig.Value
+                    local hitPos = head.Position
+                    local partName = "Head"
+                    local char = LocalPlayer.Character
+                    local headPart = char and char:FindFirstChild("Head")
+                    local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3.new(0, 1, 0)
+                    if isCharge then
+                        self.remoteEvent:FireServer("ThrustCharge", zombieRef, hitPos, rayResult.Normal)
+                    else
+                        self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
+                    end
+                    lastZombieHitTime[zombieModel] = now
+                    return 1
+                end
+            end
+        end
+    end
+    if originalMeleeHitCheck then
+        return originalMeleeHitCheck(self, origin, direction, raycastParams, hitEntities, isCharge)
+    end
+    return 0
+end
+
+local function installHook()
+    if hookInstalled then return end
+    local modules = ReplicatedStorage:FindFirstChild("Modules")
+    if not modules then return end
+    local weapons = modules:FindFirstChild("Weapons")
+    if not weapons then return end
+    local success, MeleeBase = pcall(require, weapons:FindFirstChild("MeleeBase"))
+    if not success or not MeleeBase then return end
+    if type(hookfunction) == "function" then
+        if not originalMeleeHitCheck then
+            originalMeleeHitCheck = hookfunction(MeleeBase.MeleeHitCheck, unifiedMeleeHitCheck)
+        else
+            hookfunction(MeleeBase.MeleeHitCheck, unifiedMeleeHitCheck)
+        end
+    else
+        if not originalMeleeHitCheck then
+            originalMeleeHitCheck = MeleeBase.MeleeHitCheck
+        end
+        MeleeBase.MeleeHitCheck = unifiedMeleeHitCheck
+    end
+    hookInstalled = true
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    installHook()
+end)
+
+if LocalPlayer.Character then
+    task.wait(0.5)
+    installHook()
+end
+
+--------------------------------------------------
+-- 3. ACCURATE ESP & VISIBLE HITBOX MANAGER
+--------------------------------------------------
+local function getAccurateZombieType(cameraChild, zombieModel)
+    if cameraChild then
+        if cameraChild:FindFirstChild("Barrel") then return "Bomber" end
+        if cameraChild:FindFirstChild("Sword") then return "Cuirassier" end
+        if cameraChild:FindFirstChild("Axe") then return "Sapper" end
+        if cameraChild:FindFirstChild("Torch") or cameraChild:FindFirstChild("Lantern") then return "Igniter" end
+    end
+
+    local humanoid = zombieModel and zombieModel:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        if humanoid.WalkSpeed > 18 then return "Runner" end
+        local animator = humanoid:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in animator:GetPlayingAnimationTracks() do
+                local tName = track.Name:lower()
+                if tName:find("runner") or tName:find("sprint") or tName:find("fast") or tName:find("run") then
+                    return "Runner"
+                elseif tName:find("igniter") or tName:find("torch") or tName:find("fire") then
+                    return "Igniter"
+                end
+            end
+        end
+    end
+    return "Shambler"
+end
+
 local function addHitboxesToZombie(zombie)
-    if not L.zombieHitboxEnabled or L.zombieHitboxAddedParts[zombie] then return end
+    if not L.zombieHitboxEnabled then return end
+    if L.zombieHitboxAddedParts[zombie] then return end
     local hrp = zombie:FindFirstChild("HumanoidRootPart")
     local head = zombie:FindFirstChild("Head")
     if not hrp or not head then return end
 
-    local targetTransparency = L.zombieHitboxVisible and L.zombieHitboxTransparency or 1
-    local hitboxColor = Color3_fromRGB(160, 32, 240)
-
-    local outer = Instance_new("Part")
+    -- Visible Purple Outer Hitbox Part
+    local outer = Instance.new("Part")
     outer.Name = "ZombieHitbox_Outer"
-    outer.Size = Vector3_new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
-    outer.Color = hitboxColor
+    outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
+    outer.Transparency = L.zombieHitboxTransparency
+    outer.Color = Color3.fromRGB(160, 32, 240) -- Purple
     outer.Material = Enum.Material.Neon
-    outer.Transparency = targetTransparency
     outer.CanCollide = false
     outer.CanTouch = true
     outer.Massless = true
@@ -122,17 +235,18 @@ local function addHitboxesToZombie(zombie)
     outer.CFrame = hrp.CFrame
     outer.Parent = zombie
 
-    local weldOuter = Instance_new("WeldConstraint")
+    local weldOuter = Instance.new("WeldConstraint")
     weldOuter.Part0 = hrp
     weldOuter.Part1 = outer
     weldOuter.Parent = outer
 
-    local headBox = Instance_new("Part")
+    -- Visible Purple Head Hitbox Part
+    local headBox = Instance.new("Part")
     headBox.Name = "ZombieHitbox_Head"
-    headBox.Size = Vector3_new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
-    headBox.Color = hitboxColor
+    headBox.Size = Vector3.new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
+    headBox.Transparency = L.zombieHitboxTransparency
+    headBox.Color = Color3.fromRGB(200, 50, 255) -- Lighter Purple
     headBox.Material = Enum.Material.Neon
-    headBox.Transparency = targetTransparency
     headBox.CanCollide = false
     headBox.CanTouch = true
     headBox.Massless = true
@@ -140,7 +254,7 @@ local function addHitboxesToZombie(zombie)
     headBox.CFrame = head.CFrame
     headBox.Parent = zombie
 
-    local weldHead = Instance_new("WeldConstraint")
+    local weldHead = Instance.new("WeldConstraint")
     weldHead.Part0 = head
     weldHead.Part1 = headBox
     weldHead.Parent = headBox
@@ -154,305 +268,182 @@ local function removeHitboxesFromZombie(zombie)
         if parts.outer then parts.outer:Destroy() end
         if parts.head then parts.head:Destroy() end
         L.zombieHitboxAddedParts[zombie] = nil
+    else
+        for _, child in zombie:GetChildren() do
+            if child.Name == "ZombieHitbox_Outer" or child.Name == "ZombieHitbox_Head" then
+                child:Destroy()
+            end
+        end
+    end
+end
+
+local function updateZombieESP(cameraChild, zombieModel)
+    if not zombieModel or not zombieModel:IsA("Model") then return end
+    local head = getZombieHead(zombieModel)
+    if not zombieModel:FindFirstChild("HumanoidRootPart") and not head then return end
+
+    local zType = getAccurateZombieType(cameraChild, zombieModel)
+    local config = L.espTypes[zType]
+    local isTypeEnabled = config and config.Enabled
+
+    if not isTypeEnabled and not L.zombieNameESPEnabled then
+        if L.activeESP[zombieModel] then
+            L.activeESP[zombieModel]:Destroy()
+            L.activeESP[zombieModel] = nil
+        end
+        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
+        if nameTag then nameTag:Destroy() end
+        return
+    end
+
+    if isTypeEnabled then
+        local targetAdornee = cameraChild or zombieModel
+        local highlight = L.activeESP[zombieModel]
+        if not highlight or not highlight.Parent then
+            highlight = Instance.new("Highlight")
+            highlight.Adornee = targetAdornee
+            highlight.FillTransparency = 0.5
+            highlight.OutlineTransparency = 0
+            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            pcall(function() highlight.Parent = CoreGui end)
+            L.activeESP[zombieModel] = highlight
+        end
+        highlight.FillColor = config.Color
+        highlight.OutlineColor = Color3.new(1, 1, 1)
+    else
+        if L.activeESP[zombieModel] then
+            L.activeESP[zombieModel]:Destroy()
+            L.activeESP[zombieModel] = nil
+        end
+    end
+
+    if L.zombieNameESPEnabled and head then
+        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
+        local txt
+        if not nameTag then
+            nameTag = Instance.new("BillboardGui")
+            nameTag.Name = "ZombieNameTagGUI"
+            nameTag.Adornee = head
+            nameTag.Size = UDim2.new(0, 120, 0, 30)
+            nameTag.StudsOffset = Vector3.new(0, 3.0, 0)
+            nameTag.AlwaysOnTop = true
+            
+            txt = Instance.new("TextLabel")
+            txt.Name = "NameLabel"
+            txt.Size = UDim2.new(1, 0, 1, 0)
+            txt.BackgroundTransparency = 1
+            txt.TextScaled = false
+            txt.TextSize = 13
+            txt.Font = Enum.Font.GothamBold
+            txt.TextStrokeTransparency = 0
+            txt.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+            txt.Parent = nameTag
+            nameTag.Parent = zombieModel
+        else
+            txt = nameTag:FindFirstChild("NameLabel")
+        end
+        if txt then
+            txt.Text = zType
+            txt.TextColor3 = config and config.Color or Color3.fromRGB(255, 255, 255)
+        end
+    else
+        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
+        if nameTag then nameTag:Destroy() end
     end
 end
 
 local function refreshZombieHitboxes()
     if not L.zombieHitboxEnabled then
-        for zombie in L.zombieHitboxAddedParts do
+        local toRemove = {}
+        for zombie, _ in L.zombieHitboxAddedParts do
+            table.insert(toRemove, zombie)
+        end
+        for _, zombie in toRemove do
             removeHitboxesFromZombie(zombie)
         end
         L.zombieHitboxAddedParts = {}
-        return
     end
 
-    local folders = {workspace:FindFirstChild("Zombies"), workspace:FindFirstChild("Camera")}
-    for _, folder in folders do
-        if folder then
-            for _, z in folder:GetChildren() do
-                if z:IsA("Model") and (z.Name == "m_Zombie" or z:FindFirstChild("Orig")) then
-                    addHitboxesToZombie(z)
+    local cameraFolder = workspace:FindFirstChild("Camera")
+    if cameraFolder then
+        for _, child in cameraFolder:GetChildren() do
+            if child.Name == "m_Zombie" then
+                local origin = child:FindFirstChild("Orig")
+                local zombieModel = origin and origin.Value
+                if zombieModel and zombieModel:IsA("Model") then
+                    if L.zombieHitboxEnabled and not L.zombieHitboxAddedParts[zombieModel] then
+                        addHitboxesToZombie(zombieModel)
+                    end
+                    updateZombieESP(child, zombieModel)
                 end
             end
         end
     end
 end
 
-local function updateAllZombieHitboxSizes()
+local function updateAllZombieHitboxVisuals()
     if not L.zombieHitboxEnabled then return end
     for _, parts in L.zombieHitboxAddedParts do
         if parts.outer and parts.outer.Parent then
-            parts.outer.Size = Vector3_new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
+            parts.outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
+            parts.outer.Transparency = L.zombieHitboxTransparency
         end
         if parts.head and parts.head.Parent then
-            parts.head.Size = Vector3_new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
+            parts.head.Size = Vector3.new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
+            parts.head.Transparency = L.zombieHitboxTransparency
         end
     end
 end
 
-local function updateHitboxVisibility()
-    local targetTransparency = L.zombieHitboxVisible and L.zombieHitboxTransparency or 1
-    for _, parts in L.zombieHitboxAddedParts do
-        if parts.outer and parts.outer.Parent then
-            parts.outer.Transparency = targetTransparency
-        end
-        if parts.head and parts.head.Parent then
-            parts.head.Transparency = targetTransparency
-        end
-    end
-end
-
-local function onZombieAdded(zombie)
-    if L.zombieHitboxEnabled and zombie:IsA("Model") and zombie.Name == "m_Zombie" then
-        task_wait(0.1)
-        addHitboxesToZombie(zombie)
-    end
-end
-
-local zombiesFolder = workspace:FindFirstChild("Zombies")
-if zombiesFolder then zombiesFolder.ChildAdded:Connect(onZombieAdded) end
-local cameraFolder = workspace:FindFirstChild("Camera")
-if cameraFolder then cameraFolder.ChildAdded:Connect(onZombieAdded) end
-
--- Optimized background cleanup loop
 task.spawn(function()
     while true do
-        task_wait(1)
-        if L.zombieHitboxEnabled then
-            for zombie in L.zombieHitboxAddedParts do
-                if not zombie:IsDescendantOf(workspace) or not zombie:FindFirstChild("HumanoidRootPart") then
-                    removeHitboxesFromZombie(zombie)
-                end
-            end
-        end
-    end
-end)
-
---------------------------------------------------
--- 3. COMBAT HOOKS (OPTIMIZED)
---------------------------------------------------
-local function getZombieModel(part)
-    if not part then return nil end
-    local model = part:FindFirstAncestor("m_Zombie")
-    if model then return model end
-    
-    local current = part.Parent
-    for i = 1, 3 do
-        if not current or current == workspace then break end
-        if current:FindFirstChild("Orig") then return current end
-        current = current.Parent
-    end
-    return nil
-end
-
-local function getZombieHead(zombieModel)
-    return zombieModel:FindFirstChild("Head") or zombieModel:FindFirstChild("Head", true)
-end
-
-function L.unifiedBayonetHitCheck(self, origin, direction, raycastParams, hitEntities)
-    local rayResult = workspace:Raycast(origin, direction, raycastParams)
-    if rayResult then
-        local hitPart = rayResult.Instance
-        local zombieModel = getZombieModel(hitPart)
-        if zombieModel then
-            local now = tick()
-            if L.lastZombieHitTime[zombieModel] and now - L.lastZombieHitTime[zombieModel] < L.ZOMBIE_HIT_COOLDOWN then
-                return 0
-            end
-            
-            local orig = zombieModel:FindFirstChild("Orig")
-            local head = getZombieHead(zombieModel)
-            
-            if orig and head then
-                local zombieRef = orig.Value
-                local hitPos = head.Position
-                local partName = (L.headshotEnabled or hitPart == head) and "Head" or "Torso"
-
-                if L.removeBloodEnabled then
-                    local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
-                    if rootPart then hitPos = rootPart.Position + Vector3_new(0, -9999, 0) end
-                end
-                
-                local char = LocalPlayer.Character
-                local headPart = char and char:FindFirstChild("Head")
-                local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3_new(0, 1, 0)
-                
-                self.remoteEvent:FireServer("Bayonet_HitZombie", zombieRef, hitPos, true, partName)
-                self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
-                
-                L.lastZombieHitTime[zombieModel] = now
-                return 1
-            end
-        end
-    end
-    
-    if L.originalBayonetHitCheck then
-        return L.originalBayonetHitCheck(self, origin, direction, raycastParams, hitEntities)
-    end
-    return 0
-end
-
-function L.unifiedMeleeHitCheck(self, origin, direction, raycastParams, hitEntities, isCharge)
-    local rayResult = workspace:Raycast(origin, direction, raycastParams)
-    if rayResult then
-        local hitPart = rayResult.Instance
-        local zombieModel = getZombieModel(hitPart)
-        if zombieModel then
-            local now = tick()
-            if L.lastZombieHitTime[zombieModel] and now - L.lastZombieHitTime[zombieModel] < L.ZOMBIE_HIT_COOLDOWN then
-                return 0
-            end
-            
-            local orig = zombieModel:FindFirstChild("Orig")
-            local head = getZombieHead(zombieModel)
-            
-            if orig and head then
-                local zombieRef = orig.Value
-                local hitPos = head.Position
-                local partName = (L.headshotEnabled or hitPart == head) and "Head" or "Torso"
-
-                if L.removeBloodEnabled then
-                    local rootPart = zombieModel:FindFirstChild("HumanoidRootPart") or zombieModel:FindFirstChild("Torso")
-                    if rootPart then hitPos = rootPart.Position + Vector3_new(0, -9999, 0) end
-                end
-                
-                local char = LocalPlayer.Character
-                local headPart = char and char:FindFirstChild("Head")
-                local Direction = headPart and (hitPos - headPart.Position).Unit or Vector3_new(0, 1, 0)
-                
-                if isCharge then
-                    self.remoteEvent:FireServer("ThrustCharge", zombieRef, hitPos, rayResult.Normal)
-                else
-                    self.remoteEvent:FireServer("HitZombieM", zombieRef, hitPos, true, hitPos, partName, Direction)
-                end
-                
-                L.lastZombieHitTime[zombieModel] = now
-                return 1
-            end
-        end
-    end
-    
-    if L.originalMeleeHitCheck then
-        return L.originalMeleeHitCheck(self, origin, direction, raycastParams, hitEntities, isCharge)
-    end
-    return 0
-end
-
-function L.updateHitHooks()
-    local shouldHook = L.headshotEnabled or L.removeBloodEnabled
-    local rs = ReplicatedStorage
-    local weapons = rs:FindFirstChild("Modules") and rs.Modules:FindFirstChild("Weapons")
-    local canHookFunction = type(hookfunction) == "function"
-    
-    if shouldHook and not L.hookInstalled then
-        if weapons then
-            local success, FlintLock = pcall(require, weapons:FindFirstChild("Flintlock"))
-            if success and FlintLock then
-                if canHookFunction then
-                    L.originalBayonetHitCheck = hookfunction(FlintLock.BayonetHitCheck, L.unifiedBayonetHitCheck)
-                else
-                    L.originalBayonetHitCheck = L.originalBayonetHitCheck or FlintLock.BayonetHitCheck
-                    FlintLock.BayonetHitCheck = L.unifiedBayonetHitCheck
-                end
-            end
-            local success2, MeleeBase = pcall(require, weapons:FindFirstChild("MeleeBase"))
-            if success2 and MeleeBase then
-                if canHookFunction then
-                    L.originalMeleeHitCheck = hookfunction(MeleeBase.MeleeHitCheck, L.unifiedMeleeHitCheck)
-                else
-                    L.originalMeleeHitCheck = L.originalMeleeHitCheck or MeleeBase.MeleeHitCheck
-                    MeleeBase.MeleeHitCheck = L.unifiedMeleeHitCheck
-                end
-            end
-        end
-        L.hookInstalled = true
-    elseif not shouldHook and L.hookInstalled then
-        if weapons then
-            if L.originalBayonetHitCheck then
-                local success, FlintLock = pcall(require, weapons:FindFirstChild("Flintlock"))
-                if success and FlintLock then
-                    if canHookFunction then hookfunction(FlintLock.BayonetHitCheck, L.originalBayonetHitCheck) else FlintLock.BayonetHitCheck = L.originalBayonetHitCheck end
-                end
-            end
-            if L.originalMeleeHitCheck then
-                local success, MeleeBase = pcall(require, weapons:FindFirstChild("MeleeBase"))
-                if success and MeleeBase then
-                    if canHookFunction then hookfunction(MeleeBase.MeleeHitCheck, L.originalMeleeHitCheck) else MeleeBase.MeleeHitCheck = L.originalMeleeHitCheck end
-                end
-            end
-        end
-        L.hookInstalled = false
-    end
-end
-
-LocalPlayer.CharacterAdded:Connect(function(char)
-    setupToolListeners(char)
-    task_wait(1)
-    L.updateHitHooks()
-    L.updateAllTools()
-end)
-
---------------------------------------------------
--- OBSIDIAN UI ELEMENTS
---------------------------------------------------
-LeftGroupBox:AddToggle('HitboxToggle', {
-    Text = 'Enable Hitbox Expander',
-    Default = false,
-    Tooltip = "It's in the name.",
-    Callback = function(Value)
-        L.zombieHitboxEnabled = Value
+        task.wait(1)
         refreshZombieHitboxes()
     end
+end)
+
+--------------------------------------------------
+-- 4. OBSIDIAN UI SETUP
+--------------------------------------------------
+local Window = Library:CreateWindow({
+    Title = "Tomboy Hub",
+    Footer = "Obsidian UI",
+    Icon = 0000000000,
+    NotifySide = "Right",
+    ShowCustomCursor = false,
 })
 
-LeftGroupBox:AddSlider('HitboxSizeSlider', {
-    Text = 'Hitbox Size',
-    Default = 10, Min = 2, Max = 30, Suffix = ' studs', Rounding = 0,
-    Callback = function(Value)
-        L.zombieHitboxSize = Value
-        updateAllZombieHitboxSizes()
-    end
-})
+local Tabs = {
+    Combat = Window:AddTab("Combat", "swords"),
+    Visuals = Window:AddTab("Visuals", "eye"),
+    ['UI Settings'] = Window:AddTab("UI Settings", "settings"),
+}
 
-LeftGroupBox:AddToggle('HitboxVisualsToggle', {
-    Text = 'Visible Hitboxes',
+local CombatBox = Tabs.Combat:AddLeftGroupbox("Combat Enhancements")
+local HitboxBox = Tabs.Combat:AddRightGroupbox("Zombie Hitboxes")
+local ESPBox = Tabs.Visuals:AddLeftGroupbox("Specific Zombie ESP")
+local VisualExtraBox = Tabs.Visuals:AddRightGroupbox("Extra Visuals")
+
+CombatBox:AddToggle('Tomboyhitter', {
+    Text = 'Tomboyhitter',
     Default = false,
+    Tooltip = 'its in the name you dummy',
     Callback = function(Value)
-        L.zombieHitboxVisible = Value
-        updateHitboxVisibility()
+        L.tomboyHitterEnabled = Value
     end
 })
 
-LeftGroupBox:AddSlider('HitboxTransparencySlider', {
-    Text = 'Visual Transparency',
-    Default = 60, Min = 0, Max = 100, Suffix = '%', Rounding = 0,
-    Callback = function(Value)
-        L.zombieHitboxTransparency = Value / 100
-        if L.zombieHitboxVisible then updateHitboxVisibility() end
-    end
-})
-
-RightGroupBox:AddToggle('ForceHitToggle', {
-    Text = 'Force TomboyHit (Headshots)',
-    Default = false,
-    Tooltip = "It's in the name dummy it's a force headshot.",
-    Callback = function(Value)
-        L.headshotEnabled = Value
-        L.updateHitHooks()
-    end
-})
-
-RightGroupBox:AddToggle('SpeedToggle', {
+CombatBox:AddToggle('SpeedToggle', {
     Text = 'Tomboy Speed',
     Default = false,
-    Tooltip = 'Attack speed adjust with 0.5 being most legit.',
+    Tooltip = 'Attack speed adjust.',
     Callback = function(Value)
         L.attackSpeedEnabled = Value
         L.updateAllTools()
     end
 })
 
-RightGroupBox:AddSlider('SpeedSlider', {
+CombatBox:AddSlider('SpeedSlider', {
     Text = 'Tomboy Speed Multiplier',
     Default = 1.0, Min = 0.5, Max = 10.0, Suffix = 'x', Rounding = 1,
     Callback = function(Value)
@@ -461,22 +452,69 @@ RightGroupBox:AddSlider('SpeedSlider', {
     end
 })
 
---------------------------------------------------
--- UI SETTINGS & CONFIGURATION MANAGER SETUP
---------------------------------------------------
-local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
-MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
+HitboxBox:AddToggle('HitboxToggle', {
+    Text = 'Enable Hitbox Expander',
+    Default = false,
+    Callback = function(Value)
+        L.zombieHitboxEnabled = Value
+        if not Value then
+            for zombie in L.zombieHitboxAddedParts do removeHitboxesFromZombie(zombie) end
+        end
+        refreshZombieHitboxes()
+    end
+})
 
-SaveManager:SetLibrary(Library)
-ThemeManager:SetLibrary(Library)
+HitboxBox:AddSlider('HitboxSizeSlider', {
+    Text = 'Hitbox Size',
+    Default = 10, Min = 2, Max = 30, Suffix = ' studs', Rounding = 0,
+    Callback = function(Value)
+        L.zombieHitboxSize = Value
+        updateAllZombieHitboxVisuals()
+    end
+})
 
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({})
-SaveManager:SetFolder("TomboyHubConfigs")
-ThemeManager:SetFolder("TomboyHubConfigs")
+HitboxBox:AddSlider('HitboxTransSlider', {
+    Text = 'Hitbox Transparency',
+    Default = 0.5, Min = 0.1, Max = 1.0, Suffix = '', Rounding = 2,
+    Callback = function(Value)
+        L.zombieHitboxTransparency = Value
+        updateAllZombieHitboxVisuals()
+    end
+})
 
-SaveManager:BuildConfigSection(Tabs['UI Settings'])
-ThemeManager:ApplyToTab(Tabs['UI Settings'])
-SaveManager:LoadAutoloadConfig()
+local ZOrder = {"Shambler", "Runner", "Bomber", "Igniter", "Sapper", "Cuirassier"}
+for _, zType in ZOrder do
+    ESPBox:AddToggle('ESP_'..zType, {
+        Text = zType .. ' ESP',
+        Default = false,
+        Callback = function(Value)
+            L.espTypes[zType].Enabled = Value
+            refreshZombieHitboxes()
+        end
+    })
+end
 
-print("[TOMBOY HUB]: Loaded successfully")
+VisualExtraBox:AddToggle('NameESPToggle', {
+    Text = 'Zombie Name ESP',
+    Default = false,
+    Tooltip = 'Displays the type name above tracked zombies.',
+    Callback = function(Value)
+        L.zombieNameESPEnabled = Value
+        refreshZombieHitboxes()
+    end
+})
+
+if successTheme and successSave then
+    local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
+    MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
+    SaveManager:SetLibrary(Library)
+    ThemeManager:SetLibrary(Library)
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetFolder("TomboyHubConfigs")
+    ThemeManager:SetFolder("TomboyHubConfigs")
+    SaveManager:BuildConfigSection(Tabs['UI Settings'])
+    ThemeManager:ApplyToTab(Tabs['UI Settings'])
+    SaveManager:LoadAutoloadConfig()
+end
+
+print("[TOMBOY HUB]: Loaded successfully with tomboys!")
