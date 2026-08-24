@@ -177,23 +177,29 @@ if LocalPlayer.Character then
 end
 
 --------------------------------------------------
--- 3. ACCURATE ESP & VISIBLE HITBOX MANAGER
+-- 3. ACCURATE ESP & HITBOX MANAGER (Source Integration)
 --------------------------------------------------
-local function getAccurateZombieType(cameraChild, zombieModel)
-    if cameraChild then
-        if cameraChild:FindFirstChild("Barrel") then return "Bomber" end
-        if cameraChild:FindFirstChild("Sword") then return "Cuirassier" end
-        if cameraChild:FindFirstChild("Axe") then return "Sapper" end
+local function getAccurateZombieType(zombieModel)
+    if zombieModel:FindFirstChild("Barrel") then return "Bomber" end
+    if zombieModel:FindFirstChild("Sword") then return "Cuirassier" end
+    if zombieModel:FindFirstChild("Axe") then return "Sapper" end
+
+    for _, child in zombieModel:GetChildren() do
+        if child:IsA("Model") or child:IsA("Part") then
+            if child:FindFirstChild("Barrel") then return "Bomber" end
+            if child:FindFirstChild("Sword") then return "Cuirassier" end
+            if child:FindFirstChild("Axe") then return "Sapper" end
+        end
     end
 
-    local humanoid = zombieModel and zombieModel:FindFirstChildOfClass("Humanoid")
+    local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
     if humanoid then
-        if humanoid.WalkSpeed > 20 then return "Runner" end
+        if humanoid.WalkSpeed > 22 then return "Runner" end
         local animator = humanoid:FindFirstChildOfClass("Animator")
         if animator then
             for _, track in animator:GetPlayingAnimationTracks() do
                 local tName = track.Name:lower()
-                if tName:find("runner") or tName:find("sprint") or tName:find("fast") or tName:find("run") then
+                if tName == "runner" or tName == "sprint" or tName == "fastrun" or tName:find("runner_") then
                     return "Runner"
                 end
             end
@@ -204,9 +210,19 @@ end
 
 local function getCurrentTransparency()
     if not L.zombieHitboxVisualsEnabled then
-        return 1 -- Fully transparent / invisible
+        return 1
     end
     return L.zombieHitboxTransparencyPercent / 100
+end
+
+local function getHitboxFolder()
+    local folder = workspace:FindFirstChild("TomboyHitboxFolder")
+    if not folder then
+        folder = Instance.new("Folder")
+        folder.Name = "TomboyHitboxFolder"
+        folder.Parent = workspace
+    end
+    return folder
 end
 
 local function addHitboxesToZombie(zombie)
@@ -217,39 +233,38 @@ local function addHitboxesToZombie(zombie)
     if not hrp or not head then return end
 
     local currentTrans = getCurrentTransparency()
+    local folder = getHitboxFolder()
 
-    -- Visible Purple Outer Hitbox Part
     local outer = Instance.new("Part")
     outer.Name = "ZombieHitbox_Outer"
     outer.Size = Vector3.new(L.zombieHitboxSize, L.zombieHitboxSize, L.zombieHitboxSize)
     outer.Transparency = currentTrans
-    outer.Color = Color3.fromRGB(160, 32, 240) -- Purple
+    outer.Color = Color3.fromRGB(160, 32, 240)
     outer.Material = Enum.Material.Neon
     outer.CanCollide = false
     outer.CanTouch = true
     outer.Massless = true
     outer.Anchored = false
     outer.CFrame = hrp.CFrame
-    outer.Parent = zombie
+    outer.Parent = folder
 
     local weldOuter = Instance.new("WeldConstraint")
     weldOuter.Part0 = hrp
     weldOuter.Part1 = outer
     weldOuter.Parent = outer
 
-    -- Visible Purple Head Hitbox Part
     local headBox = Instance.new("Part")
     headBox.Name = "ZombieHitbox_Head"
     headBox.Size = Vector3.new(L.zombieHitboxSize/2, L.zombieHitboxSize/2, L.zombieHitboxSize/2)
     headBox.Transparency = currentTrans
-    headBox.Color = Color3.fromRGB(200, 50, 255) -- Lighter Purple
+    headBox.Color = Color3.fromRGB(200, 50, 255)
     headBox.Material = Enum.Material.Neon
     headBox.CanCollide = false
     headBox.CanTouch = true
     headBox.Massless = true
     headBox.Anchored = false
     headBox.CFrame = head.CFrame
-    headBox.Parent = zombie
+    headBox.Parent = folder
 
     local weldHead = Instance.new("WeldConstraint")
     weldHead.Part0 = head
@@ -265,16 +280,10 @@ local function removeHitboxesFromZombie(zombie)
         if parts.outer then parts.outer:Destroy() end
         if parts.head then parts.head:Destroy() end
         L.zombieHitboxAddedParts[zombie] = nil
-    else
-        for _, child in zombie:GetChildren() do
-            if child.Name == "ZombieHitbox_Outer" or child.Name == "ZombieHitbox_Head" then
-                child:Destroy()
-            end
-        end
     end
 end
 
-local function updateZombieESP(cameraChild, zombieModel)
+local function updateZombieESPAndHitboxes(zombieModel)
     if not zombieModel or not zombieModel:IsA("Model") then return end
     
     local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
@@ -283,7 +292,7 @@ local function updateZombieESP(cameraChild, zombieModel)
     local head = getZombieHead(zombieModel)
     if not zombieModel:FindFirstChild("HumanoidRootPart") and not head then return end
 
-    local zType = getAccurateZombieType(cameraChild, zombieModel)
+    local zType = getAccurateZombieType(zombieModel)
     local config = L.espTypes[zType]
     local isTypeEnabled = config and config.Enabled
 
@@ -298,11 +307,10 @@ local function updateZombieESP(cameraChild, zombieModel)
     end
 
     if isTypeEnabled then
-        local targetAdornee = cameraChild or zombieModel
         local highlight = L.activeESP[zombieModel]
         if not highlight or not highlight.Parent then
             highlight = Instance.new("Highlight")
-            highlight.Adornee = targetAdornee
+            highlight.Adornee = zombieModel
             highlight.FillTransparency = 0.5
             highlight.OutlineTransparency = 0
             highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -354,36 +362,59 @@ local function updateZombieESP(cameraChild, zombieModel)
 end
 
 local function refreshZombieHitboxes()
-    if not L.zombieHitboxEnabled then
-        local toRemove = {}
-        for zombie, _ in L.zombieHitboxAddedParts do
+    local allZombies = {}
+    local zombiesFolder = workspace:FindFirstChild("Zombies")
+    if zombiesFolder then
+        for _, z in zombiesFolder:GetChildren() do
+            if z:IsA("Model") and (z.Name == "m_Zombie" or z:FindFirstChild("Orig")) then
+                table.insert(allZombies, z)
+            end
+        end
+    end
+    local cameraFolder = workspace:FindFirstChild("Camera")
+    if cameraFolder then
+        for _, z in cameraFolder:GetChildren() do
+            if z:IsA("Model") and (z.Name == "m_Zombie" or z:FindFirstChild("Orig")) then
+                table.insert(allZombies, z)
+            end
+        end
+    end
+
+    local toRemove = {}
+    for zombie, _ in L.zombieHitboxAddedParts do
+        local stillExists = false
+        for _, z in allZombies do
+            if z == zombie then stillExists = true; break end
+        end
+        if not stillExists then
             table.insert(toRemove, zombie)
         end
-        for _, zombie in toRemove do
+    end
+    for _, zombie in toRemove do
+        removeHitboxesFromZombie(zombie)
+    end
+
+    if not L.zombieHitboxEnabled then
+        for zombie, _ in L.zombieHitboxAddedParts do
             removeHitboxesFromZombie(zombie)
         end
         L.zombieHitboxAddedParts = {}
-    end
-
-    local cameraFolder = workspace:FindFirstChild("Camera")
-    if cameraFolder then
-        for _, child in cameraFolder:GetChildren() do
-            if child.Name == "m_Zombie" then
-                local origin = child:FindFirstChild("Orig")
-                local zombieModel = origin and origin.Value
-                if zombieModel and zombieModel:IsA("Model") then
-                    if L.zombieHitboxEnabled and not L.zombieHitboxAddedParts[zombieModel] then
-                        addHitboxesToZombie(zombieModel)
-                    end
-                    updateZombieESP(child, zombieModel)
-                end
+        local folder = workspace:FindFirstChild("TomboyHitboxFolder")
+        if folder then folder:ClearAllChildren() end
+    else
+        for _, z in allZombies do
+            if not L.zombieHitboxAddedParts[z] then
+                addHitboxesToZombie(z)
             end
         end
+    end
+
+    for _, z in allZombies do
+        updateZombieESPAndHitboxes(z)
     end
 end
 
 local function updateAllZombieHitboxVisuals()
-    if not L.zombieHitboxEnabled then return end
     local currentTrans = getCurrentTransparency()
     for _, parts in L.zombieHitboxAddedParts do
         if parts.outer and parts.outer.Parent then
@@ -396,6 +427,18 @@ local function updateAllZombieHitboxVisuals()
         end
     end
 end
+
+local function onZombieAdded(zombie)
+    if zombie:IsA("Model") and (zombie.Name == "m_Zombie" or zombie:FindFirstChild("Orig")) then
+        task.wait(0.1)
+        if L.zombieHitboxEnabled then
+            addHitboxesToZombie(zombie)
+        end
+    end
+end
+
+if zombiesFolder then zombiesFolder.ChildAdded:Connect(onZombieAdded) end
+if cameraFolder then cameraFolder.ChildAdded:Connect(onZombieAdded) end
 
 --------------------------------------------------
 -- 4. ANTILAG SYSTEM LOOP (Particles & Horses)
@@ -488,9 +531,6 @@ HitboxBox:AddToggle('HitboxToggle', {
     Default = false,
     Callback = function(Value)
         L.zombieHitboxEnabled = Value
-        if not Value then
-            for zombie in L.zombieHitboxAddedParts do removeHitboxesFromZombie(zombie) end
-        end
         refreshZombieHitboxes()
     end
 })
@@ -547,30 +587,4 @@ VisualExtraBox:AddToggle('NameESPToggle', {
 AntilagBox:AddToggle('RemoveParticlesToggle', {
     Text = 'Removes Particles',
     Default = false,
-    Tooltip = 'Deletes particle emitters, fire, and smoke effects for FPS boost.',
-    Callback = function(Value)
-        L.removeParticlesEnabled = Value
-    end
-})
-
-AntilagBox:AddToggle('RemoveHorsesToggle', {
-    Text = 'Removes Horses (Westminster/Catacombs)',
-    Default = false,
-    Tooltip = 'Cleans up horse models and related map heavy entities.',
-    Callback = function(Value)
-        L.removeHorsesEnabled = Value
-    end
-})
-
-local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
-MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
-SaveManager:SetLibrary(Library)
-ThemeManager:SetLibrary(Library)
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetFolder("TomboyHubConfigs")
-ThemeManager:SetFolder("TomboyHubConfigs")
-SaveManager:BuildConfigSection(Tabs['UI Settings'])
-ThemeManager:ApplyToTab(Tabs['UI Settings'])
-SaveManager:LoadAutoloadConfig()
-
-print("tomboy hub loaded successfully with tomboys!")
+    Tooltip = 'Deletes particle emitters, fire, 
