@@ -45,6 +45,15 @@ local originalMeleeHitCheck = nil
 local lastZombieHitTime = {}
 local ZOMBIE_HIT_COOLDOWN = 0.1
 
+-- ESP Toggles State
+local espRToggled = false
+local espBToggled = false
+local espCuToggled = false
+local espZToggled = false
+
+--------------------------------------------------
+-- 1. ATTACK SPEED SYSTEM
+--------------------------------------------------
 local function applyBuffToTool(tool)
     if not tool:IsA("Tool") then return end
     local buff = tool:FindFirstChild("SwingSpeedBuff")
@@ -79,6 +88,9 @@ end
 
 if LocalPlayer.Character then setupToolListeners(LocalPlayer.Character) end
 
+--------------------------------------------------
+-- 2. CLEAN MELEE HOOK
+--------------------------------------------------
 local function getZombieModel(part)
     if not part then return nil end
     local model = part.Parent
@@ -172,6 +184,9 @@ if LocalPlayer.Character then
     installHook()
 end
 
+--------------------------------------------------
+-- 3. HITBOX MANAGER
+--------------------------------------------------
 local function getCurrentTransparency()
     if not L.zombieHitboxVisualsEnabled then
         return 1
@@ -325,6 +340,76 @@ if zombiesFolderRef then zombiesFolderRef.ChildAdded:Connect(onZombieAdded) end
 local cameraFolderRef = workspace:FindFirstChild("Camera")
 if cameraFolderRef then cameraFolderRef.ChildAdded:Connect(onZombieAdded) end
 
+--------------------------------------------------
+-- 4. ZOMBIE ESP SYSTEM FUNCTIONS
+--------------------------------------------------
+local function ensureHighlight(target, fillColor, outlineColor)
+    if not target or not target.Parent then return end
+    if target:FindFirstChild("ESP_Highlight") then return end
+
+    local h = Instance.new("Highlight")
+    h.Name = "ESP_Highlight"
+    h.Adornee = target
+    h.Parent = target
+    h.FillColor = fillColor or Color3.fromRGB(255,255,255)
+    h.OutlineColor = outlineColor or Color3.fromRGB(255,255,255)
+end
+
+local function removeHighlight(target)
+    if not target then return end
+    local h = target:FindFirstChild("ESP_Highlight")
+    if h then h:Destroy() end
+end
+
+local function scanAndApply()
+    pcall(function()
+        for _, child in pairs(workspace.Camera:GetChildren()) do
+            if child.Name == "m_Zombie" then
+                local Origin = child:FindFirstChild("Orig")
+                if Origin and Origin.Value then
+                    local zombie = Origin.Value
+
+                    if espRToggled and zombie:FindFirstChild("Zombie") and zombie.Zombie.WalkSpeed > 20 then
+                        ensureHighlight(child, Color3.fromRGB(255, 0, 0))
+                    else
+                        removeHighlight(child)
+                    end
+
+                    if espBToggled and child:FindFirstChild("Barrel") then
+                        ensureHighlight(child, Color3.fromRGB(255, 140, 0))
+                    elseif not espRToggled then
+                        removeHighlight(child)
+                    end
+
+                    if espCuToggled and child:FindFirstChild("Sword") then
+                        ensureHighlight(child, Color3.fromRGB(0, 100, 255))
+                    elseif not (espRToggled or espBToggled) then
+                        removeHighlight(child)
+                    end
+
+                    if espZToggled and child:FindFirstChild("Axe") then
+                        ensureHighlight(child, Color3.fromRGB(255, 183, 197))
+                    elseif not (espRToggled or espBToggled or espCuToggled) then
+                        removeHighlight(child)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+workspace.Camera.ChildAdded:Connect(function(child)
+    if child.Name == "m_Zombie" then
+        task.wait(0.1)
+        scanAndApply()
+    end
+end)
+
+RunService.Heartbeat:Connect(scanAndApply)
+
+--------------------------------------------------
+-- 5. ANTILAG SYSTEM LOOP (Particles & Horses)
+--------------------------------------------------
 local function performAntilagClean()
     if L.removeParticlesEnabled then
         for _, descendant in workspace:GetDescendants() do
@@ -356,6 +441,9 @@ task.spawn(function()
     end
 end)
 
+--------------------------------------------------
+-- 6. OBSIDIAN UI SETUP
+--------------------------------------------------
 local Window = Library:CreateWindow({
     Title = "Tomboy Hub",
     Footer = "Obsidian UI",
@@ -366,12 +454,14 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Combat = Window:AddTab("Combat", "swords"),
+    ESP = Window:AddTab("ESP", "eye"),
     Antilag = Window:AddTab("Antilag", "zap"),
     ['UI Settings'] = Window:AddTab("UI Settings", "settings"),
 }
 
 local CombatBox = Tabs.Combat:AddLeftGroupbox("Combat Enhancements")
 local HitboxBox = Tabs.Combat:AddRightGroupbox("Zombie Hitboxes")
+local ESPBox = Tabs.ESP:AddLeftGroupbox("Zombie ESP Highlights")
 local AntilagBox = Tabs.Antilag:AddLeftGroupbox("Performance Optimizations")
 
 CombatBox:AddToggle('Tomboyhitter', {
@@ -438,6 +528,42 @@ HitboxBox:AddSlider('HitboxTransSlider', {
     end
 })
 
+ESPBox:AddToggle('ESPRunnerToggle', {
+    Text = 'ESP Runner (Fast)',
+    Default = false,
+    Callback = function(Value)
+        espRToggled = Value
+        scanAndApply()
+    end
+})
+
+ESPBox:AddToggle('ESPBomberToggle', {
+    Text = 'ESP Bomber',
+    Default = false,
+    Callback = function(Value)
+        espBToggled = Value
+        scanAndApply()
+    end
+})
+
+ESPBox:AddToggle('ESPCuirassToggle', {
+    Text = 'ESP Cuirassier',
+    Default = false,
+    Callback = function(Value)
+        espCuToggled = Value
+        scanAndApply()
+    end
+})
+
+ESPBox:AddToggle('ESPZapperToggle', {
+    Text = 'ESP Zapper',
+    Default = false,
+    Callback = function(Value)
+        espZToggled = Value
+        scanAndApply()
+    end
+})
+
 AntilagBox:AddToggle('RemoveParticlesToggle', {
     Text = 'Removes Particles',
     Default = false,
@@ -460,8 +586,6 @@ local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
 MenuGroup:AddButton('destroy thou script', function() 
     local folder = workspace:FindFirstChild("TomboyHitboxFolder")
     if folder then folder:Destroy() end
-    local customEspGui = LocalPlayer.PlayerGui:FindFirstChild("ZombieESP_GUI")
-    if customEspGui then customEspGui:Destroy() end
     Library:Unload() 
 end)
 
@@ -478,214 +602,5 @@ if successSM and SaveManager then
     SaveManager:BuildConfigSection(Tabs['UI Settings'])
     SaveManager:LoadAutoloadConfig()
 end
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "ZombieESP_GUI"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = PlayerGui
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-
-local win = Instance.new("Frame")
-win.Size = UDim2.new(0, 300, 0, 180)
-win.Position = UDim2.new(0, 20, 0, 80)
-win.BackgroundColor3 = Color3.fromRGB(18,18,26)
-win.BorderSizePixel = 0
-win.Parent = screenGui
-Instance.new("UICorner", win).CornerRadius = UDim.new(0,8)
-
-local title = Instance.new("TextLabel", win)
-title.Size = UDim2.new(1, -12, 0, 28)
-title.Position = UDim2.new(0, 8, 0, 6)
-title.BackgroundTransparency = 1
-title.Text = "Zombie ESP"
-title.Font = Enum.Font.GothamBold
-title.TextSize = 16
-title.TextColor3 = Color3.fromRGB(220,230,255)
-title.TextXAlignment = Enum.TextXAlignment.Left
-
-local function makeToggle(y, labelText, default)
-    local lbl = Instance.new("TextLabel", win)
-    lbl.Size = UDim2.new(0.6, -12, 0, 28)
-    lbl.Position = UDim2.new(0, 12, 0, y)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = labelText
-    lbl.Font = Enum.Font.Gotham
-    lbl.TextSize = 14
-    lbl.TextColor3 = Color3.fromRGB(210,215,230)
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local btn = Instance.new("TextButton", win)
-    btn.Size = UDim2.new(0, 60, 0, 24)
-    btn.Position = UDim2.new(1, -76, 0, y+2)
-    btn.BackgroundColor3 = default and Color3.fromRGB(60,200,100) or Color3.fromRGB(50,50,70)
-    btn.Text = default and "ON" or "OFF"
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.BorderSizePixel = 0
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
-
-    return btn
-end
-
-local tRunner = makeToggle(40, "ESP Runner (Fast)", false)
-local tBomber = makeToggle(72, "ESP Bomber", false)
-local tCuirass = makeToggle(104, "ESP Cuirassier", false)
-local tZapper = makeToggle(136, "ESP Zapper", false)
-
-local espRToggled, espBToggled, espCuToggled, espZToggled = false, false, false, false
-
-local function ensureHighlight(target, fillColor, outlineColor)
-    if not target or not target.Parent then return end
-    if target:FindFirstChild("ESP_Highlight") then return end
-
-    local h = Instance.new("Highlight")
-    h.Name = "ESP_Highlight"
-    h.Adornee = target
-    h.Parent = target
-    h.FillColor = fillColor or Color3.fromRGB(255,255,255)
-    h.OutlineColor = outlineColor or Color3.fromRGB(255,255,255)
-end
-
-local function removeHighlight(target)
-    if not target then return end
-    local h = target:FindFirstChild("ESP_Highlight")
-    if h then h:Destroy() end
-end
-
-local function scanAndApply()
-    pcall(function()
-        for _, child in pairs(workspace.Camera:GetChildren()) do
-            if child.Name == "m_Zombie" then
-                local Origin = child:FindFirstChild("Orig")
-                if Origin and Origin.Value then
-                    local zombie = Origin.Value
-
-                    if espRToggled and zombie:FindFirstChild("Zombie") and zombie.Zombie.WalkSpeed > 20 then
-                        ensureHighlight(child, Color3.fromRGB(255, 0, 0))
-                    else
-                        removeHighlight(child)
-                    end
-
-                    if espBToggled and child:FindFirstChild("Barrel") then
-                        ensureHighlight(child, Color3.fromRGB(255, 140, 0))
-                    elseif not espRToggled then
-                        removeHighlight(child)
-                    end
-
-                    if espCuToggled and child:FindFirstChild("Sword") then
-                        ensureHighlight(child, Color3.fromRGB(0, 100, 255))
-                    elseif not (espRToggled or espBToggled) then
-                        removeHighlight(child)
-                    end
-
-                    if espZToggled and child:FindFirstChild("Axe") then
-                        ensureHighlight(child, Color3.fromRGB(255, 183, 197))
-                    elseif not (espRToggled or espBToggled or espCuToggled) then
-                        removeHighlight(child)
-                    end
-                end
-            end
-        end
-    end)
-end
-
-workspace.Camera.ChildAdded:Connect(function(child)
-    if child.Name == "m_Zombie" then
-        task.wait(0.1)
-        scanAndApply()
-    end
-end)
-
-RunService.Heartbeat:Connect(scanAndApply)
-
-local function toggleButton(btn, flagName)
-    btn.MouseButton1Click:Connect(function()
-        local newState = not _G[flagName]
-        _G[flagName] = newState
-        btn.BackgroundColor3 = newState and Color3.fromRGB(60,200,100) or Color3.fromRGB(50,50,70)
-        btn.Text = newState and "ON" or "OFF"
-
-        if btn == tRunner then espRToggled = newState end
-        if btn == tBomber then espBToggled = newState end
-        if btn == tCuirass then espCuToggled = newState end
-        if btn == tZapper then espZToggled = newState end
-
-        scanAndApply()
-    end)
-end
-
-_G.espRToggled = false
-_G.espBToggled = false
-_G.espCuToggled = false
-_G.espZToggled = false
-
-toggleButton(tRunner, "espRToggled")
-toggleButton(tBomber, "espBToggled")
-toggleButton(tCuirass, "espCuToggled")
-toggleButton(tZapper, "espZToggled")
-
-task.defer(scanAndApply)
-
-local dragging = false
-local dragStart, startPos
-
-win.Active = true
-win.Selectable = true
-
-win.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = win.Position
-    end
-end)
-
-win.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
-        local delta = input.Position - dragStart
-        win.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
-        )
-    end
-end)
-
-UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-
-local keyBox = Instance.new("Frame")
-keyBox.Size = UDim2.new(0, 22, 0, 22)
-keyBox.Position = UDim2.new(1, -26, 0, 6)
-keyBox.BackgroundColor3 = Color3.fromRGB(40,40,55)
-keyBox.BorderSizePixel = 0
-keyBox.Parent = win
-Instance.new("UICorner", keyBox).CornerRadius = UDim.new(0,6)
-
-local keyLabel = Instance.new("TextLabel", keyBox)
-keyLabel.Size = UDim2.new(1,0,1,0)
-keyLabel.BackgroundTransparency = 1
-keyLabel.Text = "K"
-keyLabel.Font = Enum.Font.GothamBold
-keyLabel.TextSize = 14
-keyLabel.TextColor3 = Color3.fromRGB(220,230,255)
-
-local guiVisible = true
-
-UIS.InputBegan:Connect(function(input, gp)
-    if gp then return end
-    if input.KeyCode == Enum.KeyCode.K then
-        guiVisible = not guiVisible
-        win.Visible = guiVisible
-        keyBox.Visible = guiVisible
-    end
-end)
 
 print("tomboy hub loaded successfully with tomboys!")
-
