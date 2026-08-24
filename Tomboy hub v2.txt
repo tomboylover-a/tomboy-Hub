@@ -21,12 +21,15 @@ L.zombieHitboxAddedParts = {}
 L.activeESP = {}
 L.zombieNameESPEnabled = false
 
--- Exact Zombie Colors Configuration
+-- Antilag Globals
+L.removeParticlesEnabled = false
+L.removeHorsesEnabled = false
+
+-- Exact Zombie Colors Configuration (Igniter removed)
 L.espTypes = {
     Shambler   = { Enabled = false, Color = Color3.fromRGB(255, 255, 255) }, -- White
     Runner     = { Enabled = false, Color = Color3.fromRGB(255, 0, 0) },     -- Red
     Bomber     = { Enabled = false, Color = Color3.fromRGB(255, 140, 0) },   -- Orange
-    Igniter    = { Enabled = false, Color = Color3.fromRGB(255, 255, 0) },   -- Yellow
     Sapper     = { Enabled = false, Color = Color3.fromRGB(255, 183, 197) }, -- Sakura Pink
     Cuirassier = { Enabled = false, Color = Color3.fromRGB(0, 100, 255) }    -- Blue
 }
@@ -180,20 +183,17 @@ local function getAccurateZombieType(cameraChild, zombieModel)
         if cameraChild:FindFirstChild("Barrel") then return "Bomber" end
         if cameraChild:FindFirstChild("Sword") then return "Cuirassier" end
         if cameraChild:FindFirstChild("Axe") then return "Sapper" end
-        if cameraChild:FindFirstChild("Torch") or cameraChild:FindFirstChild("Lantern") then return "Igniter" end
     end
 
     local humanoid = zombieModel and zombieModel:FindFirstChildOfClass("Humanoid")
     if humanoid then
-        if humanoid.WalkSpeed > 18 then return "Runner" end
+        if humanoid.WalkSpeed > 20 then return "Runner" end
         local animator = humanoid:FindFirstChildOfClass("Animator")
         if animator then
             for _, track in animator:GetPlayingAnimationTracks() do
                 local tName = track.Name:lower()
                 if tName:find("runner") or tName:find("sprint") or tName:find("fast") or tName:find("run") then
                     return "Runner"
-                elseif tName:find("igniter") or tName:find("torch") or tName:find("fire") then
-                    return "Igniter"
                 end
             end
         end
@@ -266,6 +266,10 @@ end
 
 local function updateZombieESP(cameraChild, zombieModel)
     if not zombieModel or not zombieModel:IsA("Model") then return end
+    
+    local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
+    if not humanoid or Players:GetPlayerFromCharacter(zombieModel) then return end
+    
     local head = getZombieHead(zombieModel)
     if not zombieModel:FindFirstChild("HumanoidRootPart") and not head then return end
 
@@ -382,15 +386,42 @@ local function updateAllZombieHitboxVisuals()
     end
 end
 
+--------------------------------------------------
+-- 4. ANTILAG SYSTEM LOOP (Particles & Horses)
+--------------------------------------------------
+local function performAntilagClean()
+    if L.removeParticlesEnabled then
+        for _, descendant in workspace:GetDescendants() do
+            if descendant:IsA("ParticleEmitter") or descendant:IsA("Fire") or descendant:IsA("Smoke") or descendant:IsA("Sparkles") then
+                descendant:Destroy()
+            end
+        end
+    end
+
+    if L.removeHorsesEnabled then
+        for _, obj in workspace:GetDescendants() do
+            if obj:IsA("Model") or obj:IsA("BasePart") then
+                local name = obj.Name:lower()
+                if name:find("horse") or name:find("cavalry") or name:find("pony") then
+                    obj:Destroy()
+                end
+            end
+        end
+    end
+end
+
 task.spawn(function()
     while true do
         task.wait(1)
         refreshZombieHitboxes()
+        if L.removeParticlesEnabled or L.removeHorsesEnabled then
+            performAntilagClean()
+        end
     end
 end)
 
 --------------------------------------------------
--- 4. OBSIDIAN UI SETUP
+-- 5. OBSIDIAN UI SETUP
 --------------------------------------------------
 local Window = Library:CreateWindow({
     Title = "Tomboy Hub",
@@ -403,6 +434,7 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Combat = Window:AddTab("Combat", "swords"),
     Visuals = Window:AddTab("Visuals", "eye"),
+    Antilag = Window:AddTab("Antilag", "zap"),
     ['UI Settings'] = Window:AddTab("UI Settings", "settings"),
 }
 
@@ -410,6 +442,7 @@ local CombatBox = Tabs.Combat:AddLeftGroupbox("Combat Enhancements")
 local HitboxBox = Tabs.Combat:AddRightGroupbox("Zombie Hitboxes")
 local ESPBox = Tabs.Visuals:AddLeftGroupbox("Specific Zombie ESP")
 local VisualExtraBox = Tabs.Visuals:AddRightGroupbox("Extra Visuals")
+local AntilagBox = Tabs.Antilag:AddLeftGroupbox("Performance Optimizations")
 
 CombatBox:AddToggle('Tomboyhitter', {
     Text = 'Tomboyhitter',
@@ -469,7 +502,7 @@ HitboxBox:AddSlider('HitboxTransSlider', {
     end
 })
 
-local ZOrder = {"Shambler", "Runner", "Bomber", "Igniter", "Sapper", "Cuirassier"}
+local ZOrder = {"Shambler", "Runner", "Bomber", "Sapper", "Cuirassier"}
 for _, zType in ZOrder do
     ESPBox:AddToggle('ESP_'..zType, {
         Text = zType .. ' ESP',
@@ -488,6 +521,24 @@ VisualExtraBox:AddToggle('NameESPToggle', {
     Callback = function(Value)
         L.zombieNameESPEnabled = Value
         refreshZombieHitboxes()
+    end
+})
+
+AntilagBox:AddToggle('RemoveParticlesToggle', {
+    Text = 'Removes Particles',
+    Default = false,
+    Tooltip = 'Deletes particle emitters, fire, and smoke effects for FPS boost.',
+    Callback = function(Value)
+        L.removeParticlesEnabled = Value
+    end
+})
+
+AntilagBox:AddToggle('RemoveHorsesToggle', {
+    Text = 'Removes Horses (Westminster/Catacombs)',
+    Default = false,
+    Tooltip = 'Cleans up horse models and related map heavy entities.',
+    Callback = function(Value)
+        L.removeHorsesEnabled = Value
     end
 })
 
