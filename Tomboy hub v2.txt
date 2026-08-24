@@ -1,20 +1,7 @@
-local successLib, Library = pcall(function()
-    local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-    return loadstring(game:HttpGet(repo .. "Library.lua"))()
-end)
-
-if not successLib or not Library then
-    warn("[TOMBOY HUB]: Failed to load Obsidian Library.")
-    return
-end
-
-local successTheme, ThemeManager = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/ThemeManager.lua"))()
-end)
-
-local successSave, SaveManager = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/main/addons/SaveManager.lua"))()
-end)
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
 -- Services & Globals
 local Players = game:GetService("Players")
@@ -504,17 +491,15 @@ VisualExtraBox:AddToggle('NameESPToggle', {
     end
 })
 
-if successTheme and successSave then
-    local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
-    MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
-    SaveManager:SetLibrary(Library)
-    ThemeManager:SetLibrary(Library)
-    SaveManager:IgnoreThemeSettings()
-    SaveManager:SetFolder("TomboyHubConfigs")
-    ThemeManager:SetFolder("TomboyHubConfigs")
-    SaveManager:BuildConfigSection(Tabs['UI Settings'])
-    ThemeManager:ApplyToTab(Tabs['UI Settings'])
-    SaveManager:LoadAutoloadConfig()
-end
+local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
+MenuGroup:AddButton('destroy thou script', function() Library:Unload() end)
+SaveManager:SetLibrary(Library)
+ThemeManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("TomboyHubConfigs")
+ThemeManager:SetFolder("TomboyHubConfigs")
+SaveManager:BuildConfigSection(Tabs['UI Settings'])
+ThemeManager:ApplyToTab(Tabs['UI Settings'])
+SaveManager:LoadAutoloadConfig()
 
-print("[TOMBOY HUB]: Loaded successfully with tomboys!")
+print("tomboy hub loaded successfully with tomboys!")
