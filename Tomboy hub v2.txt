@@ -6,6 +6,8 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 -- Services & Globals
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local CoreGui = game:GetService("CoreGui")
 
@@ -19,21 +21,9 @@ L.zombieHitboxSize = 10
 L.zombieHitboxTransparencyPercent = 50
 L.zombieHitboxAddedParts = {}
 
-L.activeESP = {}
-L.zombieNameESPEnabled = false
-
 -- Antilag Globals
 L.removeParticlesEnabled = false
 L.removeHorsesEnabled = false
-
--- Exact Zombie Colors Configuration (Igniter removed)
-L.espTypes = {
-    Shambler   = { Enabled = false, Color = Color3.fromRGB(255, 255, 255) }, -- White
-    Runner     = { Enabled = false, Color = Color3.fromRGB(255, 0, 0) },     -- Red
-    Bomber     = { Enabled = false, Color = Color3.fromRGB(255, 140, 0) },   -- Orange
-    Sapper     = { Enabled = false, Color = Color3.fromRGB(255, 183, 197) }, -- Sakura Pink
-    Cuirassier = { Enabled = false, Color = Color3.fromRGB(0, 100, 255) }    -- Blue
-}
 
 L.attackSpeedEnabled = false
 L.attackSpeedMultiplier = 1
@@ -177,37 +167,8 @@ if LocalPlayer.Character then
 end
 
 --------------------------------------------------
--- 3. ACCURATE ESP & HITBOX MANAGER
+-- 3. HITBOX MANAGER
 --------------------------------------------------
-local function getAccurateZombieType(zombieModel)
-    if zombieModel:FindFirstChild("Barrel") then return "Bomber" end
-    if zombieModel:FindFirstChild("Sword") then return "Cuirassier" end
-    if zombieModel:FindFirstChild("Axe") then return "Sapper" end
-
-    for _, child in zombieModel:GetChildren() do
-        if child:IsA("Model") or child:IsA("Part") then
-            if child:FindFirstChild("Barrel") then return "Bomber" end
-            if child:FindFirstChild("Sword") then return "Cuirassier" end
-            if child:FindFirstChild("Axe") then return "Sapper" end
-        end
-    end
-
-    local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        if humanoid.WalkSpeed > 22 then return "Runner" end
-        local animator = humanoid:FindFirstChildOfClass("Animator")
-        if animator then
-            for _, track in animator:GetPlayingAnimationTracks() do
-                local tName = track.Name:lower()
-                if tName == "runner" or tName == "sprint" or tName == "fastrun" or tName:find("runner_") then
-                    return "Runner"
-                end
-            end
-        end
-    end
-    return "Shambler"
-end
-
 local function getCurrentTransparency()
     if not L.zombieHitboxVisualsEnabled then
         return 1
@@ -283,84 +244,6 @@ local function removeHitboxesFromZombie(zombie)
     end
 end
 
-local function updateZombieESPAndHitboxes(zombieModel)
-    if not zombieModel or not zombieModel:IsA("Model") then return end
-    
-    local humanoid = zombieModel:FindFirstChildOfClass("Humanoid")
-    if not humanoid or Players:GetPlayerFromCharacter(zombieModel) then return end
-    
-    local head = getZombieHead(zombieModel)
-    if not zombieModel:FindFirstChild("HumanoidRootPart") and not head then return end
-
-    local zType = getAccurateZombieType(zombieModel)
-    local config = L.espTypes[zType]
-    local isTypeEnabled = config and config.Enabled
-
-    if not isTypeEnabled and not L.zombieNameESPEnabled then
-        if L.activeESP[zombieModel] then
-            L.activeESP[zombieModel]:Destroy()
-            L.activeESP[zombieModel] = nil
-        end
-        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
-        if nameTag then nameTag:Destroy() end
-        return
-    end
-
-    if isTypeEnabled then
-        local highlight = L.activeESP[zombieModel]
-        if not highlight or not highlight.Parent then
-            highlight = Instance.new("Highlight")
-            highlight.Adornee = zombieModel
-            highlight.FillTransparency = 0.5
-            highlight.OutlineTransparency = 0
-            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            pcall(function() highlight.Parent = CoreGui end)
-            L.activeESP[zombieModel] = highlight
-        end
-        highlight.FillColor = config.Color
-        highlight.OutlineColor = Color3.new(1, 1, 1)
-    else
-        if L.activeESP[zombieModel] then
-            L.activeESP[zombieModel]:Destroy()
-            L.activeESP[zombieModel] = nil
-        end
-    end
-
-    if L.zombieNameESPEnabled and head then
-        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
-        local txt
-        if not nameTag then
-            nameTag = Instance.new("BillboardGui")
-            nameTag.Name = "ZombieNameTagGUI"
-            nameTag.Adornee = head
-            nameTag.Size = UDim2.new(0, 120, 0, 30)
-            nameTag.StudsOffset = Vector3.new(0, 3.0, 0)
-            nameTag.AlwaysOnTop = true
-            
-            txt = Instance.new("TextLabel")
-            txt.Name = "NameLabel"
-            txt.Size = UDim2.new(1, 0, 1, 0)
-            txt.BackgroundTransparency = 1
-            txt.TextScaled = false
-            txt.TextSize = 13
-            txt.Font = Enum.Font.GothamBold
-            txt.TextStrokeTransparency = 0
-            txt.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-            txt.Parent = nameTag
-            nameTag.Parent = zombieModel
-        else
-            txt = nameTag:FindFirstChild("NameLabel")
-        end
-        if txt then
-            txt.Text = zType
-            txt.TextColor3 = config and config.Color or Color3.fromRGB(255, 255, 255)
-        end
-    else
-        local nameTag = zombieModel:FindFirstChild("ZombieNameTagGUI")
-        if nameTag then nameTag:Destroy() end
-    end
-end
-
 local function refreshZombieHitboxes()
     local allZombies = {}
     local zombiesFolder = workspace:FindFirstChild("Zombies")
@@ -407,10 +290,6 @@ local function refreshZombieHitboxes()
                 addHitboxesToZombie(z)
             end
         end
-    end
-
-    for _, z in allZombies do
-        updateZombieESPAndHitboxes(z)
     end
 end
 
@@ -490,15 +369,12 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Combat = Window:AddTab("Combat", "swords"),
-    Visuals = Window:AddTab("Visuals", "eye"),
     Antilag = Window:AddTab("Antilag", "zap"),
     ['UI Settings'] = Window:AddTab("UI Settings", "settings"),
 }
 
 local CombatBox = Tabs.Combat:AddLeftGroupbox("Combat Enhancements")
 local HitboxBox = Tabs.Combat:AddRightGroupbox("Zombie Hitboxes")
-local ESPBox = Tabs.Visuals:AddLeftGroupbox("Specific Zombie ESP")
-local VisualExtraBox = Tabs.Visuals:AddRightGroupbox("Extra Visuals")
 local AntilagBox = Tabs.Antilag:AddLeftGroupbox("Performance Optimizations")
 
 CombatBox:AddToggle('Tomboyhitter', {
@@ -565,28 +441,6 @@ HitboxBox:AddSlider('HitboxTransSlider', {
     end
 })
 
-local ZOrder = {"Shambler", "Runner", "Bomber", "Sapper", "Cuirassier"}
-for _, zType in ZOrder do
-    ESPBox:AddToggle('ESP_'..zType, {
-        Text = zType .. ' ESP',
-        Default = false,
-        Callback = function(Value)
-            L.espTypes[zType].Enabled = Value
-            refreshZombieHitboxes()
-        end
-    })
-end
-
-VisualExtraBox:AddToggle('NameESPToggle', {
-    Text = 'Zombie Name ESP',
-    Default = false,
-    Tooltip = 'Displays the type name above tracked zombies.',
-    Callback = function(Value)
-        L.zombieNameESPEnabled = Value
-        refreshZombieHitboxes()
-    end
-})
-
 AntilagBox:AddToggle('RemoveParticlesToggle', {
     Text = 'Removes Particles',
     Default = false,
@@ -609,6 +463,8 @@ local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu Settings')
 MenuGroup:AddButton('destroy thou script', function() 
     local folder = workspace:FindFirstChild("TomboyHitboxFolder")
     if folder then folder:Destroy() end
+    local customEspGui = LocalPlayer.PlayerGui:FindFirstChild("ZombieESP_GUI")
+    if customEspGui then customEspGui:Destroy() end
     Library:Unload() 
 end)
 
@@ -621,4 +477,115 @@ SaveManager:BuildConfigSection(Tabs['UI Settings'])
 ThemeManager:ApplyToTab(Tabs['UI Settings'])
 SaveManager:LoadAutoloadConfig()
 
-print("tomboy hub loaded successfully with tomboys!")
+---------------------------------------------------------------------
+-- === CUSTOM ZOMBIE ESP GUI SCRIPT ===
+---------------------------------------------------------------------
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "ZombieESP_GUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+local win = Instance.new("Frame")
+win.Size = UDim2.new(0, 300, 0, 180)
+win.Position = UDim2.new(0, 20, 0, 80)
+win.BackgroundColor3 = Color3.fromRGB(18,18,26)
+win.BorderSizePixel = 0
+win.Parent = screenGui
+Instance.new("UICorner", win).CornerRadius = UDim.new(0,8)
+
+local title = Instance.new("TextLabel", win)
+title.Size = UDim2.new(1, -12, 0, 28)
+title.Position = UDim2.new(0, 8, 0, 6)
+title.BackgroundTransparency = 1
+title.Text = "Zombie ESP"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextColor3 = Color3.fromRGB(220,230,255)
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local function makeToggle(y, labelText, default)
+    local lbl = Instance.new("TextLabel", win)
+    lbl.Size = UDim2.new(0.6, -12, 0, 28)
+    lbl.Position = UDim2.new(0, 12, 0, y)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = labelText
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 14
+    lbl.TextColor3 = Color3.fromRGB(210,215,230)
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local btn = Instance.new("TextButton", win)
+    btn.Size = UDim2.new(0, 60, 0, 24)
+    btn.Position = UDim2.new(1, -76, 0, y+2)
+    btn.BackgroundColor3 = default and Color3.fromRGB(60,200,100) or Color3.fromRGB(50,50,70)
+    btn.Text = default and "ON" or "OFF"
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.BorderSizePixel = 0
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+
+    return btn
+end
+
+-- Toggles
+local tRunner = makeToggle(40, "ESP Runner (Fast)", false)
+local tBomber = makeToggle(72, "ESP Bomber", false)
+local tCuirass = makeToggle(104, "ESP Cuirassier", false)
+local tZapper = makeToggle(136, "ESP Zapper", false)
+
+local espRToggled, espBToggled, espCuToggled, espZToggled = false, false, false, false
+
+local function ensureHighlight(target, fillColor, outlineColor)
+    if not target or not target.Parent then return end
+    if target:FindFirstChild("ESP_Highlight") then return end
+
+    local h = Instance.new("Highlight")
+    h.Name = "ESP_Highlight"
+    h.Adornee = target
+    h.Parent = target
+    h.FillColor = fillColor or Color3.fromRGB(255,255,255)
+    h.OutlineColor = outlineColor or Color3.fromRGB(255,255,255)
+end
+
+local function removeHighlight(target)
+    if not target then return end
+    local h = target:FindFirstChild("ESP_Highlight")
+    if h then h:Destroy() end
+end
+
+local function scanAndApply()
+    pcall(function()
+        for _, child in pairs(workspace.Camera:GetChildren()) do
+            if child.Name == "m_Zombie" then
+                local Origin = child:FindFirstChild("Orig")
+                if Origin and Origin.Value then
+                    local zombie = Origin.Value
+
+                    -- Runner (Red)
+                    if espRToggled and zombie:FindFirstChild("Zombie") and zombie.Zombie.WalkSpeed > 20 then
+                        ensureHighlight(child, Color3.fromRGB(255, 0, 0))
+                    else
+                        removeHighlight(child)
+                    end
+
+                    -- Bomber (Orange)
+                    if espBToggled and child:FindFirstChild("Barrel") then
+                        ensureHighlight(child, Color3.fromRGB(255, 140, 0))
+                    elseif not espRToggled then
+                        removeHighlight(child)
+                    end
+
+                    -- Cuirassier (Blue)
+                    if espCuToggled and child:FindFirstChild("Sword") then
+                        ensureHighlight(child, Color3.fromRGB(0, 100, 255))
+                    elseif not (espRToggled or espBToggled) then
+                        removeHighlight(child)
+                    end
+
+                    -- Zapper/Sapper (Sakura Pink)
+                    if espZToggled and child:FindFirstChild("Axe") then
+                        ensureHighlight(child, Color3.fromR
